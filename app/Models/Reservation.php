@@ -10,22 +10,37 @@ class Reservation extends Model
     use HasFactory;
 
     protected $fillable = [
-        'client_id',
-        'intervenant_id',
-        'reservation_date',
-        'reservation_time',
-        'guests',
-        'note',
-        'status',
+        'annonce_id', 'client_id', 'intervenant_id',
+        'reservation_date', 'reservation_time', 'guests', 'note',
+        'price', 'service_fee_rate', 'service_fee_amount',
+        'commission_rate', 'commission_amount', 'intervenant_amount',
+        'total_client_amount', 'currency', 'status', 'is_paid',
+        'payment_status', 'payment_intent_id', 'paid_at'
     ];
 
-    // CLIENT (celui qui réserve)
+    protected $casts = [
+        'reservation_date' => 'date',
+        'is_paid' => 'boolean',
+        'paid_at' => 'datetime',
+        'price' => 'decimal:2',
+        'service_fee_rate' => 'decimal:2',
+        'service_fee_amount' => 'decimal:2',
+        'commission_rate' => 'decimal:2',
+        'commission_amount' => 'decimal:2',
+        'intervenant_amount' => 'decimal:2',
+        'total_client_amount' => 'decimal:2',
+    ];
+
+    public function annonce()
+    {
+        return $this->belongsTo(Annonce::class);
+    }
+
     public function client()
     {
         return $this->belongsTo(User::class, 'client_id');
     }
 
-    // INTERVENANT (prestataire / agent)
     public function intervenant()
     {
         return $this->belongsTo(User::class, 'intervenant_id');
@@ -33,6 +48,11 @@ class Reservation extends Model
 
     public function payement()
     {
-        return $this->hasOne(Payement::class, 'intervenant_id', 'intervenant_id');
+        return $this->hasOne(Payement::class, 'reservation_id');
+    }
+
+    public function review()
+    {
+        return $this->hasOne(Review::class);
     }
 }

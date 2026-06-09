@@ -7,9 +7,24 @@ use Illuminate\Database\Eloquent\Model;
 
 class Document extends Model
 {
+    use HasFactory;
+
     protected $fillable = [
-        'name',
-        'file_path',
-        'status'
+        'user_id', 'name', 'document_type', 'file_path', 'status',
+        'validated_by', 'validated_at', 'rejection_reason'
     ];
+
+    protected $casts = [
+        'validated_at' => 'datetime',
+    ];
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    public function validator()
+    {
+        return $this->belongsTo(User::class, 'validated_by');
+    }
 }

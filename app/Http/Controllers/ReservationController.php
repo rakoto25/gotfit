@@ -10,135 +10,93 @@ class ReservationController extends Controller
 {
     public function getAllReservation()
     {
-        $reservation = Reservation::latest()->get();
+        $reservations = Reservation::with(['client', 'intervenant', 'annonce', 'payement'])
+            ->latest()
+            ->get();
 
-        return response()->json([
-            'status' => 200,
-            'reservation' => $reservation,
-        ]);
+        return response()->json(['status' => 200, 'reservations' => $reservations]);
     }
 
     public function getReservationByIntervenant()
     {
-        $intervenant_id = Auth::id();
-
-        $reservations = Reservation::where('intervenant_id', $intervenant_id)
+        $reservations = Reservation::with(['client', 'intervenant', 'annonce', 'payement'])
+            ->where('intervenant_id', Auth::id())
             ->latest()
             ->get();
 
-        return response()->json([
-            'status' => 200,
-            'reservations' => $reservations,
-        ]);
+        return response()->json(['status' => 200, 'reservations' => $reservations]);
     }
 
     public function getReservationByClient()
     {
-        $client_id = Auth::id();
-
-        $reservations = Reservation::where('client_id', $client_id)
+        $reservations = Reservation::with(['client', 'intervenant', 'annonce', 'payement', 'review'])
+            ->where('client_id', Auth::id())
             ->latest()
             ->get();
 
-        return response()->json([
-            'status' => 200,
-            'reservations' => $reservations,
-        ]);
+        return response()->json(['status' => 200, 'reservations' => $reservations]);
+    }
+
+    public function show($id)
+    {
+        $reservation = Reservation::with(['client', 'intervenant', 'annonce', 'payement', 'review'])->findOrFail($id);
+        $user = Auth::user();
+
+        if (!$user->hasRole('admin') && (int) $reservation->client_id !== (int) $user->id && (int) $reservation->intervenant_id !== (int) $user->id) {
+            return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
+        }
+
+        return response()->json(['status' => 200, 'reservation' => $reservation]);
     }
 
     public function validerReservation($id)
     {
-        $reservation = Reservation::findOrFail($id);
-
-        // option sécurité : seul l’intervenant peut valider
-        if ($reservation->intervenant_id !== Auth::id()) {
-            return response()->json([
-                'status' => 403,
-                'message' => 'Non autorisé'
-            ], 403);
-        }
-
-        $reservation->update([
-            'status' => 'confirme'
-        ]);
-
-        return response()->json([
-            'status' => 200,
-            'message' => 'Réservation confirmée avec succès',
-            'reservation' => $reservation
-        ]);
+        return $this->updateStatus($id, 'confirme', 'Réservation confirmée avec succès');
     }
 
     public function refuserReservation($id)
     {
-        $reservation = Reservation::findOrFail($id);
-
-        if ($reservation->intervenant_id !== Auth::id()) {
-            return response()->json([
-                'status' => 403,
-                'message' => 'Non autorisé'
-            ], 403);
-        }
-
-        $reservation->update([
-            'status' => 'refuse'
-        ]);
-
-        return response()->json([
-            'status' => 200,
-            'message' => 'Réservation refusée',
-            'reservation' => $reservation
-        ]);
+        return $this->updateStatus($id, 'refuse', 'Réservation refusée');
     }
 
     public function terminerReservation($id)
     {
         $reservation = Reservation::findOrFail($id);
 
-        if ($reservation->intervenant_id !== Auth::id()) {
+        if (!$reservation->is_paid) {
             return response()->json([
-                'status' => 403,
-                'message' => 'Non autorisé'
-            ], 403);
+                'status' => 400,
+                'message' => 'Impossible de terminer une réservation non payée.',
+            ], 400);
         }
 
-        $reservation->update([
-            'status' => 'realise'
-        ]);
-
-        return response()->json([
-            'status' => 200,
-            'message' => 'Réservation marquée comme réalisée',
-            'reservation' => $reservation
-        ]);
+        return $this->updateStatus($id, 'realise', 'Réservation marquée comme réalisée');
     }
 
     public function filterByStatus(Request $request)
     {
-        $request->validate([
-            'status' => 'required|in:attente,confirme,refuse,realise'
-        ]);
+        $request->validate(['status' => 'required|in:attente,confirme,refuse,realise']);
 
-        $reservations = Reservation::where('status', $request->status)
+        $reservations = Reservation::with(['client', 'intervenant', 'annonce', 'payement'])
+            ->where('intervenant_id', Auth::id())
+            ->where('status', $request->status)
             ->latest()
             ->get();
 
-        return response()->json([
-            'status' => 200,
-            'reservations' => $reservations,
-        ]);
+        return response()->json(['status' => 200, 'reservations' => $reservations]);
     }
 
-    public function getReservationWithPayment($id)
+    private function updateStatus($id, string $status, string $message)
     {
-        $reservation = Reservation::with('payement')->findOrFail($id);
+        $reservation = Reservation::with(['client', 'intervenant', 'annonce'])->findOrFail($id);
 
-        return response()->json([
-            'status' => 200,
-            'reservation' => $reservation,
-            'is_paid' => $reservation->is_paid,
-        ]);
+        if ((int) $reservation->intervenant_id !== (int) Auth::id()) {
+            return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
+        }
+
+        $reservation->update(['status' => $status]);
+        $reservation->load(['client', 'intervenant', 'annonce', 'payement']);
+
+        return response()->json(['status' => 200, 'message' => $message, 'reservation' => $reservation]);
     }
-
-    
 }

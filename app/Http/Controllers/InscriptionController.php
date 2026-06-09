@@ -6,41 +6,53 @@ use App\Models\Role;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rule;
 
 class InscriptionController extends Controller
 {
+    /**
+     * Inscription publique.
+     *
+     * Important : seuls les comptes client et intervenant peuvent être créés
+     * depuis le formulaire public/mobile. Les comptes structure et admin sont
+     * créés uniquement depuis le back-office administrateur.
+     */
     public function register(Request $request)
     {
-        // 1. Validation
         $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
             'password' => 'required|min:6',
-            'role' => 'nullable|in:admin,intervenant,client',
+            'role' => ['nullable', Rule::in(['client', 'intervenant'])],
+            'phone' => 'nullable|string|max:50',
+            'address' => 'nullable|string|max:255',
+        ], [
+            'role.in' => 'Le rôle choisi est invalide. L’inscription publique accepte uniquement client ou intervenant.',
         ]);
 
-        // 2. Créer utilisateur
+        $roleSlug = $request->role ?? 'client';
+
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
             'password' => Hash::make($request->password),
+            'phone' => $request->phone,
+            'address' => $request->address,
+            // Le client peut réserver immédiatement. L'intervenant doit être validé par l'admin.
+            'account_status' => $roleSlug === 'intervenant' ? 'pending' : 'approved',
         ]);
 
-        // 3. Déterminer rôle (client par défaut)
-        $roleSlug = $request->role ?? 'client';
+        $role = Role::firstOrCreate(
+            ['slug' => $roleSlug],
+            ['name' => ucfirst($roleSlug), 'description' => null, 'is_active' => true]
+        );
 
-        $role = Role::where('slug', $roleSlug)->first();
+        $user->roles()->syncWithoutDetaching([$role->id]);
 
-        if ($role) {
-            $user->roles()->attach($role->id);
-        }
-
-        // 4. Response
-        return response()->json([   
-            'status' => 200,   
+        return response()->json([
+            'status' => 200,
             'message' => 'Inscription réussie',
-            'user' => $user->load('roles')
+            'user' => $user->load('roles'),
         ]);
-
     }
 }

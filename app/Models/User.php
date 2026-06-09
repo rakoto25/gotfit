@@ -3,7 +3,10 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
@@ -13,7 +16,7 @@ class User extends Authenticatable
     use HasApiTokens, HasFactory, Notifiable;
 
     /**
-     * The attributes that are mass assignable.
+     * Les champs modifiables.
      *
      * @var array<int, string>
      */
@@ -22,13 +25,19 @@ class User extends Authenticatable
         'email',
         'password',
         'photo',
+        'cover_photo',
         'bio',
         'phone',
         'address',
+        'account_status',
+        'validated_by',
+        'validated_at',
+        'rejection_reason',
+        'fcm_token',
     ];
 
     /**
-     * The attributes that should be hidden for serialization.
+     * Les champs cachés dans les réponses JSON.
      *
      * @var array<int, string>
      */
@@ -38,38 +47,102 @@ class User extends Authenticatable
     ];
 
     /**
-     * The attributes that should be cast.
+     * Les champs ajoutés automatiquement dans les réponses JSON.
+     *
+     * @var array<int, string>
+     */
+    protected $appends = [
+        'photo_url',
+        'cover_photo_url',
+    ];
+
+    /**
+     * Les casts.
      *
      * @var array<string, string>
      */
     protected $casts = [
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
+        'validated_at' => 'datetime',
     ];
 
-    public function roles()
+    /**
+     * URL complète de la photo de profil pour l'application mobile.
+     */
+    public function getPhotoUrlAttribute(): ?string
+    {
+        if (!$this->photo) {
+            return null;
+        }
+
+        return asset('storage/' . $this->photo);
+    }
+
+    /**
+     * URL complète de la photo de couverture pour l'application mobile.
+     */
+    public function getCoverPhotoUrlAttribute(): ?string
+    {
+        if (!$this->cover_photo) {
+            return null;
+        }
+
+        return asset('storage/' . $this->cover_photo);
+    }
+
+    public function roles(): BelongsToMany
     {
         return $this->belongsToMany(Role::class);
     }
 
-    public function annonces()
+    public function annonces(): HasMany
     {
         return $this->hasMany(Annonce::class);
     }
 
-    // helper important
-    public function isIntervenant()
+    public function hasRole(string $slug): bool
     {
-        return $this->roles()->where('slug', 'intervenant')->exists();
+        return $this->roles()->where('slug', $slug)->exists();
     }
 
-    public function reservationsAsClient()
+    public function isIntervenant(): bool
+    {
+        return $this->hasRole('intervenant');
+    }
+
+    public function isClient(): bool
+    {
+        return $this->hasRole('client');
+    }
+
+    public function isStructure(): bool
+    {
+        return $this->hasRole('structure');
+    }
+
+    public function reservationsAsClient(): HasMany
     {
         return $this->hasMany(Reservation::class, 'client_id');
     }
 
-    public function reservationsAsIntervenant()
+    public function reservationsAsIntervenant(): HasMany
     {
         return $this->hasMany(Reservation::class, 'intervenant_id');
+    }
+
+    public function documents(): HasMany
+    {
+        return $this->hasMany(Document::class);
+    }
+
+    public function missions(): HasMany
+    {
+        return $this->hasMany(Mission::class, 'structure_id');
+    }
+
+    public function reviewsReceived(): HasMany
+    {
+        return $this->hasMany(Review::class, 'intervenant_id');
     }
 }

@@ -6,30 +6,24 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
-        Schema::create('messages', function (Blueprint $table) {
-            $table->id();
-
-            $table->foreignId('annonce_id')->constrained()->onDelete('cascade');
-
-            $table->foreignId('sender_id')->constrained('users')->onDelete('cascade');
-            $table->foreignId('receiver_id')->constrained('users')->onDelete('cascade');
-
-            $table->text('message');
-
-            $table->timestamps();
-        });
+        // Ancienne table de messages liée directement aux annonces.
+        // Renommée pour éviter le conflit avec la vraie table messages des conversations.
+        if (!Schema::hasTable('annonce_messages')) {
+            Schema::create('annonce_messages', function (Blueprint $table) {
+                $table->id();
+                $table->foreignId('annonce_id')->constrained()->onDelete('cascade');
+                $table->foreignId('sender_id')->constrained('users')->onDelete('cascade');
+                $table->foreignId('receiver_id')->constrained('users')->onDelete('cascade');
+                $table->text('message');
+                $table->timestamps();
+            });
+        }
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
-        Schema::dropIfExists('messages');
+        Schema::dropIfExists('annonce_messages');
     }
 };
