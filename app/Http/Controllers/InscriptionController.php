@@ -23,11 +23,11 @@ class InscriptionController extends Controller
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
             'password' => 'required|min:6',
-            'role' => ['nullable', Rule::in(['client', 'intervenant'])],
+            'role' => ['nullable', Rule::in(['client', 'intervenant', 'structure'])],
             'phone' => 'nullable|string|max:50',
             'address' => 'nullable|string|max:255',
         ], [
-            'role.in' => 'Le rôle choisi est invalide. L’inscription publique accepte uniquement client ou intervenant.',
+            'role.in' => 'Le rôle choisi est invalide. L’inscription publique accepte uniquement client, intervenant ou structure.',
         ]);
 
         $roleSlug = $request->role ?? 'client';
@@ -39,7 +39,7 @@ class InscriptionController extends Controller
             'phone' => $request->phone,
             'address' => $request->address,
             // Le client peut réserver immédiatement. L'intervenant doit être validé par l'admin.
-            'account_status' => $roleSlug === 'intervenant' ? 'pending' : 'approved',
+            'account_status' => in_array($roleSlug, ['intervenant', 'structure'], true) ? 'pending' : 'approved',
         ]);
 
         $role = Role::firstOrCreate(
