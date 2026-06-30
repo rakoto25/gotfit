@@ -12,12 +12,25 @@ class Payement extends Model
     protected $table = 'payments';
 
     protected $fillable = [
-        'reservation_id', 'payment_intent_id', 'amount', 'service_fee',
-        'commission_rate', 'commission', 'intervenant_amount', 'net_amount',
-        'intervenant_id', 'client_id', 'currency', 'status'
+        'reservation_id',
+        'payment_intent_id',
+        'stripe_transfer_id',
+        'transferred_at',
+        'amount',
+        'service_fee',
+        'commission_rate',
+        'commission',
+        'intervenant_amount',
+        'net_amount',
+        'intervenant_id',
+        'client_id',
+        'currency',
+        'status',
+        'payout_status',
     ];
 
     protected $casts = [
+        'transferred_at' => 'datetime',
         'amount' => 'decimal:2',
         'service_fee' => 'decimal:2',
         'commission_rate' => 'decimal:2',
