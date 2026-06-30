@@ -46,24 +46,19 @@ Route::get('/debug-sanctum-user', function (Request $request) {
 
     return response()->json([
         'bearer_token' => $plainToken,
-
         'access_token_found' => $accessToken ? true : false,
         'access_token_id' => $accessToken?->id,
         'token_name' => $accessToken?->name,
         'token_created_at' => $accessToken?->created_at,
         'token_last_used_at' => $accessToken?->last_used_at,
         'token_expires_at' => $accessToken?->expires_at,
-
         'sanctum_config_expiration' => config('sanctum.expiration'),
-
         'tokenable_type' => $accessToken?->tokenable_type,
         'tokenable_id' => $accessToken?->tokenable_id,
         'tokenable_found' => $tokenable ? true : false,
         'tokenable_user' => $tokenable,
-
         'auth_sanctum_check' => auth('sanctum')->check(),
         'auth_sanctum_user' => auth('sanctum')->user(),
-
         'auth_default_check' => auth()->check(),
         'auth_default_user' => auth()->user(),
     ]);
@@ -93,9 +88,6 @@ Route::get('/annonces/{id}/detail', [AnnonceController::class, 'detailAnnonce'])
 |--------------------------------------------------------------------------
 | INTERVENANTS PUBLICS
 |--------------------------------------------------------------------------
-| Route utilisée par la webapp :
-| GET /api/intervenants
-|--------------------------------------------------------------------------
 */
 
 Route::get('/intervenants', [ProfileController::class, 'publicIntervenants']);
@@ -113,9 +105,6 @@ Route::get('/missions', [MissionController::class, 'index']);
 |--------------------------------------------------------------------------
 | CONTACT PUBLIC
 |--------------------------------------------------------------------------
-| Route utilisée par la webapp :
-| POST /api/contact
-|--------------------------------------------------------------------------
 */
 
 Route::post('/contact', [ContactController::class, 'send'])
@@ -131,6 +120,15 @@ Route::post('/payment/webhook', [PayementController::class, 'handleWebhook']);
 
 /*
 |--------------------------------------------------------------------------
+| RETOURS PUBLICS STRIPE CONNECT
+|--------------------------------------------------------------------------
+*/
+
+Route::get('/stripe/connect/return', [PayementController::class, 'connectReturn']);
+Route::get('/stripe/connect/refresh', [PayementController::class, 'connectRefresh']);
+
+/*
+|--------------------------------------------------------------------------
 | ROUTES CONNECTÉES COMMUNES
 |--------------------------------------------------------------------------
 */
@@ -140,6 +138,15 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/profile', [ProfileController::class, 'show']);
     Route::post('/profile/update', [ProfileController::class, 'update']);
+
+    /*
+    |--------------------------------------------------------------------------
+    | STRIPE CONNECT INTERVENANT
+    |--------------------------------------------------------------------------
+    */
+
+    Route::post('/stripe/connect/onboarding', [PayementController::class, 'createConnectOnboarding']);
+    Route::get('/stripe/connect/status', [PayementController::class, 'connectStatus']);
 
     /*
     |--------------------------------------------------------------------------
@@ -155,9 +162,6 @@ Route::middleware('auth:sanctum')->group(function () {
     /*
     |--------------------------------------------------------------------------
     | MESSAGERIE UTILISATEUR
-    |--------------------------------------------------------------------------
-    | /message/contacts est accessible à tous les utilisateurs connectés.
-    | Ne pas utiliser /users côté mobile, car /users est réservé aux admins.
     |--------------------------------------------------------------------------
     */
 
@@ -182,9 +186,6 @@ Route::middleware('auth:sanctum')->group(function () {
     /*
     |--------------------------------------------------------------------------
     | ANCIENNES ROUTES MESSAGERIE GARDÉES TEMPORAIREMENT
-    |--------------------------------------------------------------------------
-    | Ces routes permettent de ne pas casser l'application mobile actuelle.
-    | Après correction de src/api/message.ts, tu pourras les supprimer.
     |--------------------------------------------------------------------------
     */
 
@@ -249,13 +250,6 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
     |--------------------------------------------------------------------------
     | MESSAGERIE ADMIN
     |--------------------------------------------------------------------------
-    | Routes utilisées par le webadmin :
-    | GET    /api/admin/messages
-    | POST   /api/admin/messages
-    | PUT    /api/admin/messages/{id}/read
-    | POST   /api/admin/messages/{id}/reply
-    | DELETE /api/admin/messages/{id}
-    |--------------------------------------------------------------------------
     */
 
     Route::get('/admin/messages', [AdminMessageController::class, 'index']);
@@ -298,6 +292,8 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
     */
 
     Route::get('/reservation/all', [ReservationController::class, 'getAllReservation']);
+    Route::post('/reservation/{id}/validate-prestation', [PayementController::class, 'validatePrestation'])->whereNumber('id');
+    Route::post('/reservation/{id}/transfer-to-coach', [PayementController::class, 'transferToCoach'])->whereNumber('id');
 
     /*
     |--------------------------------------------------------------------------
@@ -365,7 +361,7 @@ Route::middleware(['auth:sanctum', 'is_client'])->group(function () {
     Route::get('/reservation/client', [ReservationController::class, 'getReservationByClient']);
 
     Route::post('/create-payment-intent', [PayementController::class, 'createPaymentIntent']);
-    Route::get('/payment/status/{id}', [PayementController::class, 'checkPaymentStatus'])->whereNumber('id');
+    Route::get('/payment/status/{id}', [PayementController::class, 'checkPaymentStatus']);
 
     Route::post('/reservations/{id}/review', [ReviewController::class, 'store'])->whereNumber('id');
 });
