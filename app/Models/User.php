@@ -34,6 +34,8 @@ class User extends Authenticatable
         'validated_at',
         'rejection_reason',
         'fcm_token',
+        'stripe_account_id',
+        'stripe_onboarding_completed',
     ];
 
     /**
@@ -65,6 +67,7 @@ class User extends Authenticatable
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
         'validated_at' => 'datetime',
+        'stripe_onboarding_completed' => 'boolean',
     ];
 
     /**
