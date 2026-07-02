@@ -92,6 +92,7 @@ class PayementController extends Controller
             'payment_status' => 'pending',
             'prestation_status' => 'pending_payment',
             'payout_status' => 'pending',
+            'status' => 'attente_paiement',
         ]);
 
         return response()->json([
@@ -181,6 +182,7 @@ class PayementController extends Controller
                     'stripe_charge_id' => $chargeId,
                     'paid_at' => now(),
                     'validation_deadline' => now()->addHours($validationDelay),
+                    'status' => 'payee',
                 ]);
             });
         }
@@ -194,6 +196,7 @@ class PayementController extends Controller
                     'payment_status' => 'failed',
                     'prestation_status' => 'payment_failed',
                     'payout_status' => 'failed',
+                    'status' => 'paiement_echoue',
                 ]);
             }
         }
@@ -208,6 +211,7 @@ class PayementController extends Controller
                 $payment->reservation->update([
                     'prestation_status' => $status,
                     'payout_status' => $status === 'disputed' ? 'blocked' : $payment->reservation->payout_status,
+                    'status' => $status === 'disputed' ? 'litige' : 'payee',
                     'disputed_at' => $status === 'disputed' ? now() : $payment->reservation->disputed_at,
                     'dispute_reason' => $status === 'disputed' ? 'Litige Stripe ouvert' : $payment->reservation->dispute_reason,
                 ]);
@@ -316,6 +320,7 @@ class PayementController extends Controller
 
         $reservation->update([
             'prestation_status' => 'validated',
+            'status' => 'validee',
             'validated_at' => now(),
             'validated_by' => $request->user()?->id,
         ]);
@@ -342,6 +347,7 @@ class PayementController extends Controller
 
         $reservation->update([
             'prestation_status' => 'validated',
+            'status' => 'validee',
             'validated_at' => now(),
             'validated_by' => $request->user()->id,
         ]);
@@ -369,8 +375,11 @@ class PayementController extends Controller
             return response()->json(['status' => 400, 'message' => 'La réservation doit être payée avant litige'], 400);
         }
 
-        if ($reservation->stripe_transfer_id) {
-            return response()->json(['status' => 400, 'message' => 'Le reversement est déjà effectué. Contactez l’administration.'], 400);
+        if ($reservation->stripe_transfer_id || $reservation->payout_status === 'transferred') {
+            return response()->json([
+                'status' => 400,
+                'message' => 'Impossible d’ouvrir un litige après reversement coach.',
+            ], 400);
         }
 
         if (in_array($reservation->prestation_status, ['validated', 'transferred', 'refunded', 'cancelled'], true)) {
@@ -380,9 +389,16 @@ class PayementController extends Controller
         $reservation->update([
             'prestation_status' => 'disputed',
             'payout_status' => 'blocked',
+            'status' => 'litige',
             'disputed_at' => now(),
             'dispute_reason' => $request->reason,
         ]);
+
+        if ($reservation->payement) {
+            $reservation->payement->update([
+                'payout_status' => 'blocked',
+            ]);
+        }
 
         return response()->json([
             'status' => 200,
@@ -397,6 +413,10 @@ class PayementController extends Controller
 
         $reservation = Reservation::with(['intervenant', 'payement'])->findOrFail($id);
 
+        if ($reservation->stripe_transfer_id || $reservation->payout_status === 'transferred') {
+            return response()->json(['status' => 400, 'message' => 'Reversement déjà effectué'], 400);
+        }
+
         if (!$reservation->is_paid || $reservation->payment_status !== 'paid') {
             return response()->json(['status' => 400, 'message' => 'Réservation non payée'], 400);
         }
@@ -405,12 +425,8 @@ class PayementController extends Controller
             return response()->json(['status' => 400, 'message' => 'Prestation non validée'], 400);
         }
 
-        if (in_array($reservation->payout_status, ['blocked', 'refunded', 'cancelled'], true)) {
+        if (in_array($reservation->payout_status, ['blocked', 'refunded', 'cancelled', 'reversed'], true)) {
             return response()->json(['status' => 400, 'message' => 'Reversement bloqué pour cette réservation'], 400);
-        }
-
-        if ($reservation->stripe_transfer_id) {
-            return response()->json(['status' => 400, 'message' => 'Reversement déjà effectué'], 400);
         }
 
         $coach = $reservation->intervenant;
@@ -470,17 +486,20 @@ class PayementController extends Controller
             ], 400);
         }
 
+        $now = now();
+
         $reservation->update([
             'stripe_transfer_id' => $transfer->id,
-            'transferred_at' => now(),
+            'transferred_at' => $now,
             'payout_status' => 'transferred',
             'prestation_status' => 'transferred',
+            'status' => 'terminee',
         ]);
 
         if ($reservation->payement) {
             $reservation->payement->update([
                 'stripe_transfer_id' => $transfer->id,
-                'transferred_at' => now(),
+                'transferred_at' => $now,
                 'payout_status' => 'transferred',
                 'status' => 'transferred',
             ]);
@@ -514,6 +533,13 @@ class PayementController extends Controller
             return response()->json(['status' => 400, 'message' => 'Réservation déjà remboursée'], 400);
         }
 
+        if ($reservation->stripe_transfer_id || $reservation->payout_status === 'transferred') {
+            return response()->json([
+                'status' => 400,
+                'message' => 'Impossible de rembourser après reversement coach.',
+            ], 400);
+        }
+
         $amount = $request->filled('amount') ? (float) $request->amount : (float) $reservation->total_client_amount;
         $amountInCents = (int) round($amount * 100);
         $totalInCents = (int) round(((float) $reservation->total_client_amount) * 100);
@@ -534,18 +560,6 @@ class PayementController extends Controller
             ], [
                 'idempotency_key' => 'reservation_' . $reservation->id . '_refund_' . $amountInCents,
             ]);
-
-            if ($reservation->stripe_transfer_id) {
-                Transfer::createReversal($reservation->stripe_transfer_id, [
-                    'amount' => min($amountInCents, (int) round(((float) $reservation->intervenant_amount) * 100)),
-                    'metadata' => [
-                        'reservation_id' => $reservation->id,
-                        'refund_id' => $refund->id,
-                    ],
-                ], [
-                    'idempotency_key' => 'reservation_' . $reservation->id . '_transfer_reversal_' . $refund->id,
-                ]);
-            }
         } catch (\Throwable $e) {
             Log::error('Erreur remboursement Stripe', [
                 'reservation_id' => $reservation->id,
@@ -564,7 +578,8 @@ class PayementController extends Controller
         $reservation->update([
             'payment_status' => $isFullRefund ? 'refunded' : 'partially_refunded',
             'prestation_status' => $isFullRefund ? 'refunded' : 'disputed',
-            'payout_status' => $reservation->stripe_transfer_id ? 'reversed' : 'blocked',
+            'payout_status' => $isFullRefund ? 'cancelled' : 'blocked',
+            'status' => $isFullRefund ? 'remboursee' : 'litige',
             'refunded_at' => now(),
             'refund_reason' => $request->admin_note ?: 'Remboursement admin',
         ]);
@@ -572,7 +587,7 @@ class PayementController extends Controller
         if ($reservation->payement) {
             $reservation->payement->update([
                 'status' => $isFullRefund ? 'refunded' : 'partially_refunded',
-                'payout_status' => $reservation->stripe_transfer_id ? 'reversed' : 'blocked',
+                'payout_status' => $isFullRefund ? 'cancelled' : 'blocked',
             ]);
         }
 
@@ -587,13 +602,9 @@ class PayementController extends Controller
     public function resolveDispute(Request $request, $id)
     {
         $request->validate([
-            'decision' => 'required|in:validate,refund,cancel',
+            'decision' => 'required|in:validate,pay_coach,refund,refund_client,cancel',
             'admin_note' => 'nullable|string|max:2000',
         ]);
-
-        if ($request->decision === 'refund') {
-            return $this->refundReservation($request, $id);
-        }
 
         $reservation = Reservation::with(['client', 'intervenant', 'payement'])->findOrFail($id);
 
@@ -601,13 +612,24 @@ class PayementController extends Controller
             return response()->json(['status' => 400, 'message' => 'Cette réservation n’est pas en litige'], 400);
         }
 
+        if (in_array($request->decision, ['refund', 'refund_client'], true)) {
+            return $this->refundReservation($request, $id);
+        }
+
         if ($request->decision === 'cancel') {
             $reservation->update([
                 'prestation_status' => 'cancelled',
                 'payout_status' => 'cancelled',
+                'status' => 'annulee',
                 'resolved_at' => now(),
                 'resolution_note' => $request->admin_note,
             ]);
+
+            if ($reservation->payement) {
+                $reservation->payement->update([
+                    'payout_status' => 'cancelled',
+                ]);
+            }
 
             return response()->json([
                 'status' => 200,
@@ -619,15 +641,22 @@ class PayementController extends Controller
         $reservation->update([
             'prestation_status' => 'validated',
             'payout_status' => 'pending',
+            'status' => 'validee',
             'validated_at' => now(),
             'validated_by' => $request->user()?->id,
             'resolved_at' => now(),
             'resolution_note' => $request->admin_note,
         ]);
 
+        if ($reservation->payement) {
+            $reservation->payement->update([
+                'payout_status' => 'pending',
+            ]);
+        }
+
         return response()->json([
             'status' => 200,
-            'message' => 'Litige clôturé : prestation validée',
+            'message' => 'Litige clôturé : prestation validée. Le reversement coach peut être déclenché.',
             'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
         ]);
     }
