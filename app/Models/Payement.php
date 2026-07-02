@@ -14,6 +14,7 @@ class Payement extends Model
     protected $fillable = [
         'reservation_id',
         'payment_intent_id',
+        'stripe_charge_id',
         'stripe_transfer_id',
         'transferred_at',
         'amount',

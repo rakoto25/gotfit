@@ -294,6 +294,8 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
     Route::get('/reservation/all', [ReservationController::class, 'getAllReservation']);
     Route::post('/reservation/{id}/validate-prestation', [PayementController::class, 'validatePrestation'])->whereNumber('id');
     Route::post('/reservation/{id}/transfer-to-coach', [PayementController::class, 'transferToCoach'])->whereNumber('id');
+    Route::post('/reservation/{id}/resolve-dispute', [PayementController::class, 'resolveDispute'])->whereNumber('id');
+    Route::post('/reservation/{id}/refund', [PayementController::class, 'refundReservation'])->whereNumber('id');
 
     /*
     |--------------------------------------------------------------------------
@@ -362,6 +364,8 @@ Route::middleware(['auth:sanctum', 'is_client'])->group(function () {
 
     Route::post('/create-payment-intent', [PayementController::class, 'createPaymentIntent']);
     Route::get('/payment/status/{id}', [PayementController::class, 'checkPaymentStatus']);
+    Route::post('/reservation/{id}/confirm-prestation', [PayementController::class, 'confirmPrestationByClient'])->whereNumber('id');
+    Route::post('/reservation/{id}/dispute', [PayementController::class, 'disputePrestation'])->whereNumber('id');
 
     Route::post('/reservations/{id}/review', [ReviewController::class, 'store'])->whereNumber('id');
 });

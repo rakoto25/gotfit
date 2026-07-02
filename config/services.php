@@ -35,6 +35,7 @@ return [
         'key' => env('STRIPE_KEY'),
         'secret' => env('STRIPE_SECRET'),
         'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+        'validation_delay_hours' => env('STRIPE_VALIDATION_DELAY_HOURS', 72),
     ],
 
 ];
