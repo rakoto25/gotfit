@@ -34,120 +34,64 @@ class PayementController extends Controller
 
     public function createPaymentIntent(Request $request)
     {
-        $stripeSecret = config('services.stripe.secret');
-
-        if (!$stripeSecret) {
-            Log::error('Stripe secret manquant dans config services.stripe.secret');
-
-            return response()->json([
-                'status' => 500,
-                'message' => 'Configuration Stripe manquante. Vérifiez STRIPE_SECRET dans le fichier .env.',
-            ], 500);
-        }
-
-        Stripe::setApiKey($stripeSecret);
+        Stripe::setApiKey(config('services.stripe.secret'));
 
         $request->validate([
             'reservation_id' => 'required|exists:reservations,id',
         ]);
 
-        $reservation = Reservation::with(['annonce', 'intervenant'])
-            ->findOrFail($request->reservation_id);
+        $reservation = Reservation::with(['annonce', 'intervenant'])->findOrFail($request->reservation_id);
 
         if ((int) $reservation->client_id !== (int) auth()->id()) {
-            return response()->json([
-                'status' => 403,
-                'message' => 'Non autorisé',
-            ], 403);
+            return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
         if ($reservation->is_paid || $reservation->payment_status === 'paid') {
-            return response()->json([
-                'status' => 400,
-                'message' => 'Cette réservation est déjà payée',
-            ], 400);
+            return response()->json(['status' => 400, 'message' => 'Cette réservation est déjà payée'], 400);
         }
 
         if (in_array($reservation->prestation_status, ['disputed', 'cancelled', 'refunded'], true)) {
-            return response()->json([
-                'status' => 400,
-                'message' => 'Cette réservation ne peut plus être payée',
-            ], 400);
+            return response()->json(['status' => 400, 'message' => 'Cette réservation ne peut plus être payée'], 400);
         }
 
         $amountInCents = (int) round(((float) $reservation->total_client_amount) * 100);
 
         if ($amountInCents <= 0) {
-            return response()->json([
-                'status' => 400,
-                'message' => 'Montant invalide',
-            ], 400);
+            return response()->json(['status' => 400, 'message' => 'Montant invalide'], 400);
         }
 
         if ($reservation->payment_intent_id && $reservation->payment_status === 'pending') {
-            try {
-                $existingIntent = PaymentIntent::retrieve($reservation->payment_intent_id);
-
-                return response()->json([
-                    'status' => 200,
-                    'clientSecret' => $existingIntent->client_secret,
-                    'payment_intent_id' => $existingIntent->id,
-                    'amount' => $reservation->total_client_amount,
-                    'currency' => $reservation->currency ?: 'eur',
-                    'reservation' => $reservation->fresh(['annonce', 'client', 'intervenant']),
-                ]);
-            } catch (\Throwable $e) {
-                Log::warning('PaymentIntent existant introuvable ou invalide', [
-                    'reservation_id' => $reservation->id,
-                    'payment_intent_id' => $reservation->payment_intent_id,
-                    'error' => $e->getMessage(),
-                ]);
-
-                $reservation->update([
-                    'payment_intent_id' => null,
-                    'payment_status' => 'unpaid',
-                    'status' => 'attente',
-                ]);
-            }
-        }
-
-        try {
-            $paymentIntent = PaymentIntent::create([
-                'amount' => $amountInCents,
-                'currency' => $reservation->currency ?: 'eur',
-                'automatic_payment_methods' => ['enabled' => true],
-                'transfer_group' => 'reservation_' . $reservation->id,
-                'metadata' => [
-                    'reservation_id' => $reservation->id,
-                    'client_id' => $reservation->client_id,
-                    'intervenant_id' => $reservation->intervenant_id,
-                    'platform_commission_amount' => $reservation->commission_amount,
-                    'coach_amount' => $reservation->intervenant_amount,
-                ],
-            ], [
-                'idempotency_key' => 'reservation_' . $reservation->id . '_payment_intent',
-            ]);
-        } catch (\Throwable $e) {
-            Log::error('Erreur création PaymentIntent Stripe', [
-                'reservation_id' => $reservation->id,
-                'amount' => $amountInCents,
-                'currency' => $reservation->currency ?: 'eur',
-                'error' => $e->getMessage(),
-            ]);
+            $existingIntent = PaymentIntent::retrieve($reservation->payment_intent_id);
 
             return response()->json([
-                'status' => 500,
-                'message' => 'Impossible d’initialiser le paiement Stripe.',
-                'error' => $e->getMessage(),
-            ], 500);
+                'status' => 200,
+                'clientSecret' => $existingIntent->client_secret,
+                'payment_intent_id' => $existingIntent->id,
+                'amount' => $reservation->total_client_amount,
+                'currency' => $reservation->currency ?: 'eur',
+                'reservation' => $reservation,
+            ]);
         }
+
+        $paymentIntent = PaymentIntent::create([
+            'amount' => $amountInCents,
+            'currency' => $reservation->currency ?: 'eur',
+            'automatic_payment_methods' => ['enabled' => true],
+            'transfer_group' => 'reservation_' . $reservation->id,
+            'metadata' => [
+                'reservation_id' => $reservation->id,
+                'client_id' => $reservation->client_id,
+                'intervenant_id' => $reservation->intervenant_id,
+                'platform_commission_amount' => $reservation->commission_amount,
+                'coach_amount' => $reservation->intervenant_amount,
+            ],
+        ]);
 
         $reservation->update([
             'payment_intent_id' => $paymentIntent->id,
             'payment_status' => 'pending',
             'prestation_status' => 'pending_payment',
             'payout_status' => 'pending',
-            'status' => 'attente',
         ]);
 
         return response()->json([
@@ -156,37 +100,15 @@ class PayementController extends Controller
             'payment_intent_id' => $paymentIntent->id,
             'amount' => $reservation->total_client_amount,
             'currency' => $reservation->currency ?: 'eur',
-            'reservation' => $reservation->fresh(['annonce', 'client', 'intervenant']),
+            'reservation' => $reservation,
         ]);
     }
 
     public function checkPaymentStatus($paymentIntentId)
     {
-        $stripeSecret = config('services.stripe.secret');
+        Stripe::setApiKey(config('services.stripe.secret'));
 
-        if (!$stripeSecret) {
-            return response()->json([
-                'status' => 500,
-                'message' => 'Configuration Stripe manquante.',
-            ], 500);
-        }
-
-        Stripe::setApiKey($stripeSecret);
-
-        try {
-            $paymentIntent = PaymentIntent::retrieve($paymentIntentId);
-        } catch (\Throwable $e) {
-            Log::error('Erreur vérification PaymentIntent Stripe', [
-                'payment_intent_id' => $paymentIntentId,
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'status' => 500,
-                'message' => 'Impossible de vérifier le paiement Stripe.',
-                'error' => $e->getMessage(),
-            ], 500);
-        }
+        $paymentIntent = PaymentIntent::retrieve($paymentIntentId);
 
         return response()->json([
             'status' => 200,
@@ -202,7 +124,6 @@ class PayementController extends Controller
 
         if (!$secret || !$sigHeader) {
             Log::warning('Stripe webhook refusé: signature ou secret manquant');
-
             return response()->json(['error' => 'Signature Stripe manquante'], 400);
         }
 
@@ -210,7 +131,6 @@ class PayementController extends Controller
             $event = Webhook::constructEvent($payload, $sigHeader, $secret);
         } catch (\Throwable $e) {
             Log::warning('Stripe webhook invalide', ['error' => $e->getMessage()]);
-
             return response()->json(['error' => 'Webhook invalide'], 400);
         }
 
@@ -261,7 +181,6 @@ class PayementController extends Controller
                     'stripe_charge_id' => $chargeId,
                     'paid_at' => now(),
                     'validation_deadline' => now()->addHours($validationDelay),
-                    'status' => 'confirme',
                 ]);
             });
         }
@@ -275,7 +194,6 @@ class PayementController extends Controller
                     'payment_status' => 'failed',
                     'prestation_status' => 'payment_failed',
                     'payout_status' => 'failed',
-                    'status' => 'attente',
                 ]);
             }
         }
@@ -290,7 +208,6 @@ class PayementController extends Controller
                 $payment->reservation->update([
                     'prestation_status' => $status,
                     'payout_status' => $status === 'disputed' ? 'blocked' : $payment->reservation->payout_status,
-                    'status' => $status === 'disputed' ? 'attente' : 'confirme',
                     'disputed_at' => $status === 'disputed' ? now() : $payment->reservation->disputed_at,
                     'dispute_reason' => $status === 'disputed' ? 'Litige Stripe ouvert' : $payment->reservation->dispute_reason,
                 ]);
@@ -302,16 +219,7 @@ class PayementController extends Controller
 
     public function createConnectOnboarding(Request $request)
     {
-        $stripeSecret = config('services.stripe.secret');
-
-        if (!$stripeSecret) {
-            return response()->json([
-                'status' => 500,
-                'message' => 'Configuration Stripe manquante.',
-            ], 500);
-        }
-
-        Stripe::setApiKey($stripeSecret);
+        Stripe::setApiKey(config('services.stripe.secret'));
 
         $user = $request->user();
 
@@ -320,7 +228,6 @@ class PayementController extends Controller
         }
 
         if (!$user->stripe_account_id) {
-            try {
                 $account = Account::create([
                     'type' => 'express',
                     'email' => $user->email,
@@ -329,19 +236,11 @@ class PayementController extends Controller
                         'card_payments' => ['requested' => true],
                         'transfers' => ['requested' => true],
                     ],
+                    'metadata' => [
+                        'user_id' => $user->id,
+                        'platform' => 'gotfit',
+                    ],
                 ]);
-            } catch (\Throwable $e) {
-                Log::error('Erreur création compte Stripe Connect', [
-                    'user_id' => $user->id,
-                    'error' => $e->getMessage(),
-                ]);
-
-                return response()->json([
-                    'status' => 500,
-                    'message' => 'Impossible de créer le compte Stripe Connect.',
-                    'error' => $e->getMessage(),
-                ], 500);
-            }
 
             $user->update([
                 'stripe_account_id' => $account->id,
@@ -349,26 +248,14 @@ class PayementController extends Controller
             ]);
         }
 
-        try {
+            $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech/webapp'), '/');
+
             $accountLink = AccountLink::create([
                 'account' => $user->stripe_account_id,
-                'refresh_url' => config('app.url') . '/api/stripe/connect/refresh',
-                'return_url' => config('app.url') . '/api/stripe/connect/return',
+                'refresh_url' => $frontendUrl . '/profile?stripe=refresh',
+                'return_url' => $frontendUrl . '/profile?stripe=success',
                 'type' => 'account_onboarding',
             ]);
-        } catch (\Throwable $e) {
-            Log::error('Erreur création lien Stripe Connect', [
-                'user_id' => $user->id,
-                'stripe_account_id' => $user->stripe_account_id,
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'status' => 500,
-                'message' => 'Impossible de générer le lien Stripe Connect.',
-                'error' => $e->getMessage(),
-            ], 500);
-        }
 
         return response()->json([
             'status' => 200,
@@ -379,16 +266,7 @@ class PayementController extends Controller
 
     public function connectStatus(Request $request)
     {
-        $stripeSecret = config('services.stripe.secret');
-
-        if (!$stripeSecret) {
-            return response()->json([
-                'status' => 500,
-                'message' => 'Configuration Stripe manquante.',
-            ], 500);
-        }
-
-        Stripe::setApiKey($stripeSecret);
+        Stripe::setApiKey(config('services.stripe.secret'));
 
         $user = $request->user();
 
@@ -400,22 +278,7 @@ class PayementController extends Controller
             ]);
         }
 
-        try {
-            $account = Account::retrieve($user->stripe_account_id);
-        } catch (\Throwable $e) {
-            Log::error('Erreur récupération statut Stripe Connect', [
-                'user_id' => $user->id,
-                'stripe_account_id' => $user->stripe_account_id,
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'status' => 500,
-                'message' => 'Impossible de vérifier le compte Stripe Connect.',
-                'error' => $e->getMessage(),
-            ], 500);
-        }
-
+        $account = Account::retrieve($user->stripe_account_id);
         $completed = (bool) ($account->charges_enabled && $account->payouts_enabled);
 
         $user->update([
@@ -434,18 +297,16 @@ class PayementController extends Controller
 
     public function connectReturn()
     {
-        return response()->json([
-            'status' => 200,
-            'message' => 'Onboarding Stripe terminé. Vous pouvez revenir dans Gotfit.',
-        ]);
+        $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech/webapp'), '/');
+
+        return redirect()->away($frontendUrl . '/profile?stripe=success');
     }
 
     public function connectRefresh()
     {
-        return response()->json([
-            'status' => 200,
-            'message' => 'Lien Stripe expiré. Veuillez relancer la connexion Stripe depuis Gotfit.',
-        ]);
+        $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech/webapp'), '/');
+
+        return redirect()->away($frontendUrl . '/profile?stripe=refresh');
     }
 
     public function validatePrestation(Request $request, $id)
@@ -459,21 +320,13 @@ class PayementController extends Controller
 
         $reservation->update([
             'prestation_status' => 'validated',
-            'payout_status' => 'pending',
-            'status' => 'confirme',
             'validated_at' => now(),
             'validated_by' => $request->user()?->id,
         ]);
 
-        if ($reservation->payement) {
-            $reservation->payement->update([
-                'payout_status' => 'pending',
-            ]);
-        }
-
         return response()->json([
             'status' => 200,
-            'message' => 'Prestation validée. Le reversement coach peut être déclenché par l’administration.',
+            'message' => 'Prestation validée',
             'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
         ]);
     }
@@ -493,21 +346,13 @@ class PayementController extends Controller
 
         $reservation->update([
             'prestation_status' => 'validated',
-            'payout_status' => 'pending',
-            'status' => 'confirme',
             'validated_at' => now(),
             'validated_by' => $request->user()->id,
         ]);
 
-        if ($reservation->payement) {
-            $reservation->payement->update([
-                'payout_status' => 'pending',
-            ]);
-        }
-
         return response()->json([
             'status' => 200,
-            'message' => 'Prestation confirmée. Le reversement coach peut être déclenché par l’administration.',
+            'message' => 'Prestation confirmée. Le reversement coach peut être déclenché.',
             'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
         ]);
     }
@@ -528,11 +373,8 @@ class PayementController extends Controller
             return response()->json(['status' => 400, 'message' => 'La réservation doit être payée avant litige'], 400);
         }
 
-        if ($reservation->stripe_transfer_id || $reservation->payout_status === 'transferred') {
-            return response()->json([
-                'status' => 400,
-                'message' => 'Impossible d’ouvrir un litige après reversement coach.',
-            ], 400);
+        if ($reservation->stripe_transfer_id) {
+            return response()->json(['status' => 400, 'message' => 'Le reversement est déjà effectué. Contactez l’administration.'], 400);
         }
 
         if (in_array($reservation->prestation_status, ['validated', 'transferred', 'refunded', 'cancelled'], true)) {
@@ -542,16 +384,9 @@ class PayementController extends Controller
         $reservation->update([
             'prestation_status' => 'disputed',
             'payout_status' => 'blocked',
-            'status' => 'attente',
             'disputed_at' => now(),
             'dispute_reason' => $request->reason,
         ]);
-
-        if ($reservation->payement) {
-            $reservation->payement->update([
-                'payout_status' => 'blocked',
-            ]);
-        }
 
         return response()->json([
             'status' => 200,
@@ -562,22 +397,9 @@ class PayementController extends Controller
 
     public function transferToCoach($id)
     {
-        $stripeSecret = config('services.stripe.secret');
-
-        if (!$stripeSecret) {
-            return response()->json([
-                'status' => 500,
-                'message' => 'Configuration Stripe manquante.',
-            ], 500);
-        }
-
-        Stripe::setApiKey($stripeSecret);
+        Stripe::setApiKey(config('services.stripe.secret'));
 
         $reservation = Reservation::with(['intervenant', 'payement'])->findOrFail($id);
-
-        if ($reservation->stripe_transfer_id || $reservation->payout_status === 'transferred') {
-            return response()->json(['status' => 400, 'message' => 'Reversement déjà effectué'], 400);
-        }
 
         if (!$reservation->is_paid || $reservation->payment_status !== 'paid') {
             return response()->json(['status' => 400, 'message' => 'Réservation non payée'], 400);
@@ -587,8 +409,12 @@ class PayementController extends Controller
             return response()->json(['status' => 400, 'message' => 'Prestation non validée'], 400);
         }
 
-        if (in_array($reservation->payout_status, ['blocked', 'refunded', 'cancelled', 'reversed'], true)) {
+        if (in_array($reservation->payout_status, ['blocked', 'refunded', 'cancelled'], true)) {
             return response()->json(['status' => 400, 'message' => 'Reversement bloqué pour cette réservation'], 400);
+        }
+
+        if ($reservation->stripe_transfer_id) {
+            return response()->json(['status' => 400, 'message' => 'Reversement déjà effectué'], 400);
         }
 
         $coach = $reservation->intervenant;
@@ -648,20 +474,17 @@ class PayementController extends Controller
             ], 400);
         }
 
-        $now = now();
-
         $reservation->update([
             'stripe_transfer_id' => $transfer->id,
-            'transferred_at' => $now,
+            'transferred_at' => now(),
             'payout_status' => 'transferred',
             'prestation_status' => 'transferred',
-            'status' => 'realise',
         ]);
 
         if ($reservation->payement) {
             $reservation->payement->update([
                 'stripe_transfer_id' => $transfer->id,
-                'transferred_at' => $now,
+                'transferred_at' => now(),
                 'payout_status' => 'transferred',
                 'status' => 'transferred',
             ]);
@@ -677,16 +500,7 @@ class PayementController extends Controller
 
     public function refundReservation(Request $request, $id)
     {
-        $stripeSecret = config('services.stripe.secret');
-
-        if (!$stripeSecret) {
-            return response()->json([
-                'status' => 500,
-                'message' => 'Configuration Stripe manquante.',
-            ], 500);
-        }
-
-        Stripe::setApiKey($stripeSecret);
+        Stripe::setApiKey(config('services.stripe.secret'));
 
         $request->validate([
             'amount' => 'nullable|numeric|min:0.5',
@@ -702,13 +516,6 @@ class PayementController extends Controller
 
         if ($reservation->payment_status === 'refunded') {
             return response()->json(['status' => 400, 'message' => 'Réservation déjà remboursée'], 400);
-        }
-
-        if ($reservation->stripe_transfer_id || $reservation->payout_status === 'transferred') {
-            return response()->json([
-                'status' => 400,
-                'message' => 'Impossible de rembourser après reversement coach.',
-            ], 400);
         }
 
         $amount = $request->filled('amount') ? (float) $request->amount : (float) $reservation->total_client_amount;
@@ -731,6 +538,18 @@ class PayementController extends Controller
             ], [
                 'idempotency_key' => 'reservation_' . $reservation->id . '_refund_' . $amountInCents,
             ]);
+
+            if ($reservation->stripe_transfer_id) {
+                Transfer::createReversal($reservation->stripe_transfer_id, [
+                    'amount' => min($amountInCents, (int) round(((float) $reservation->intervenant_amount) * 100)),
+                    'metadata' => [
+                        'reservation_id' => $reservation->id,
+                        'refund_id' => $refund->id,
+                    ],
+                ], [
+                    'idempotency_key' => 'reservation_' . $reservation->id . '_transfer_reversal_' . $refund->id,
+                ]);
+            }
         } catch (\Throwable $e) {
             Log::error('Erreur remboursement Stripe', [
                 'reservation_id' => $reservation->id,
@@ -749,8 +568,7 @@ class PayementController extends Controller
         $reservation->update([
             'payment_status' => $isFullRefund ? 'refunded' : 'partially_refunded',
             'prestation_status' => $isFullRefund ? 'refunded' : 'disputed',
-            'payout_status' => $isFullRefund ? 'cancelled' : 'blocked',
-            'status' => $isFullRefund ? 'refuse' : 'attente',
+            'payout_status' => $reservation->stripe_transfer_id ? 'reversed' : 'blocked',
             'refunded_at' => now(),
             'refund_reason' => $request->admin_note ?: 'Remboursement admin',
         ]);
@@ -758,7 +576,7 @@ class PayementController extends Controller
         if ($reservation->payement) {
             $reservation->payement->update([
                 'status' => $isFullRefund ? 'refunded' : 'partially_refunded',
-                'payout_status' => $isFullRefund ? 'cancelled' : 'blocked',
+                'payout_status' => $reservation->stripe_transfer_id ? 'reversed' : 'blocked',
             ]);
         }
 
@@ -773,9 +591,13 @@ class PayementController extends Controller
     public function resolveDispute(Request $request, $id)
     {
         $request->validate([
-            'decision' => 'required|in:validate,pay_coach,refund,refund_client,cancel',
+            'decision' => 'required|in:validate,refund,cancel',
             'admin_note' => 'nullable|string|max:2000',
         ]);
+
+        if ($request->decision === 'refund') {
+            return $this->refundReservation($request, $id);
+        }
 
         $reservation = Reservation::with(['client', 'intervenant', 'payement'])->findOrFail($id);
 
@@ -783,24 +605,13 @@ class PayementController extends Controller
             return response()->json(['status' => 400, 'message' => 'Cette réservation n’est pas en litige'], 400);
         }
 
-        if (in_array($request->decision, ['refund', 'refund_client'], true)) {
-            return $this->refundReservation($request, $id);
-        }
-
         if ($request->decision === 'cancel') {
             $reservation->update([
                 'prestation_status' => 'cancelled',
                 'payout_status' => 'cancelled',
-                'status' => 'refuse',
                 'resolved_at' => now(),
                 'resolution_note' => $request->admin_note,
             ]);
-
-            if ($reservation->payement) {
-                $reservation->payement->update([
-                    'payout_status' => 'cancelled',
-                ]);
-            }
 
             return response()->json([
                 'status' => 200,
@@ -812,22 +623,15 @@ class PayementController extends Controller
         $reservation->update([
             'prestation_status' => 'validated',
             'payout_status' => 'pending',
-            'status' => 'confirme',
             'validated_at' => now(),
             'validated_by' => $request->user()?->id,
             'resolved_at' => now(),
             'resolution_note' => $request->admin_note,
         ]);
 
-        if ($reservation->payement) {
-            $reservation->payement->update([
-                'payout_status' => 'pending',
-            ]);
-        }
-
         return response()->json([
             'status' => 200,
-            'message' => 'Litige clôturé : prestation validée. Le reversement coach peut être déclenché par l’administration.',
+            'message' => 'Litige clôturé : prestation validée',
             'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
         ]);
     }
