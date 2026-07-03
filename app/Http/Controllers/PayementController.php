@@ -106,6 +106,7 @@ class PayementController extends Controller
                 $reservation->update([
                     'payment_intent_id' => null,
                     'payment_status' => 'unpaid',
+                    'status' => 'attente',
                 ]);
             }
         }
@@ -146,7 +147,7 @@ class PayementController extends Controller
             'payment_status' => 'pending',
             'prestation_status' => 'pending_payment',
             'payout_status' => 'pending',
-            'status' => 'attente_paiement',
+            'status' => 'attente',
         ]);
 
         return response()->json([
@@ -260,7 +261,7 @@ class PayementController extends Controller
                     'stripe_charge_id' => $chargeId,
                     'paid_at' => now(),
                     'validation_deadline' => now()->addHours($validationDelay),
-                    'status' => 'payee',
+                    'status' => 'confirme',
                 ]);
             });
         }
@@ -274,7 +275,7 @@ class PayementController extends Controller
                     'payment_status' => 'failed',
                     'prestation_status' => 'payment_failed',
                     'payout_status' => 'failed',
-                    'status' => 'paiement_echoue',
+                    'status' => 'attente',
                 ]);
             }
         }
@@ -289,7 +290,7 @@ class PayementController extends Controller
                 $payment->reservation->update([
                     'prestation_status' => $status,
                     'payout_status' => $status === 'disputed' ? 'blocked' : $payment->reservation->payout_status,
-                    'status' => $status === 'disputed' ? 'litige' : 'payee',
+                    'status' => $status === 'disputed' ? 'attente' : 'confirme',
                     'disputed_at' => $status === 'disputed' ? now() : $payment->reservation->disputed_at,
                     'dispute_reason' => $status === 'disputed' ? 'Litige Stripe ouvert' : $payment->reservation->dispute_reason,
                 ]);
@@ -458,7 +459,7 @@ class PayementController extends Controller
 
         $reservation->update([
             'prestation_status' => 'validated',
-            'status' => 'validee',
+            'status' => 'confirme',
             'validated_at' => now(),
             'validated_by' => $request->user()?->id,
         ]);
@@ -485,7 +486,7 @@ class PayementController extends Controller
 
         $reservation->update([
             'prestation_status' => 'validated',
-            'status' => 'validee',
+            'status' => 'confirme',
             'validated_at' => now(),
             'validated_by' => $request->user()->id,
         ]);
@@ -527,7 +528,7 @@ class PayementController extends Controller
         $reservation->update([
             'prestation_status' => 'disputed',
             'payout_status' => 'blocked',
-            'status' => 'litige',
+            'status' => 'attente',
             'disputed_at' => now(),
             'dispute_reason' => $request->reason,
         ]);
@@ -640,7 +641,7 @@ class PayementController extends Controller
             'transferred_at' => $now,
             'payout_status' => 'transferred',
             'prestation_status' => 'transferred',
-            'status' => 'terminee',
+            'status' => 'realise',
         ]);
 
         if ($reservation->payement) {
@@ -735,7 +736,7 @@ class PayementController extends Controller
             'payment_status' => $isFullRefund ? 'refunded' : 'partially_refunded',
             'prestation_status' => $isFullRefund ? 'refunded' : 'disputed',
             'payout_status' => $isFullRefund ? 'cancelled' : 'blocked',
-            'status' => $isFullRefund ? 'remboursee' : 'litige',
+            'status' => $isFullRefund ? 'refuse' : 'attente',
             'refunded_at' => now(),
             'refund_reason' => $request->admin_note ?: 'Remboursement admin',
         ]);
@@ -776,7 +777,7 @@ class PayementController extends Controller
             $reservation->update([
                 'prestation_status' => 'cancelled',
                 'payout_status' => 'cancelled',
-                'status' => 'annulee',
+                'status' => 'refuse',
                 'resolved_at' => now(),
                 'resolution_note' => $request->admin_note,
             ]);
@@ -797,7 +798,7 @@ class PayementController extends Controller
         $reservation->update([
             'prestation_status' => 'validated',
             'payout_status' => 'pending',
-            'status' => 'validee',
+            'status' => 'confirme',
             'validated_at' => now(),
             'validated_by' => $request->user()?->id,
             'resolved_at' => now(),
