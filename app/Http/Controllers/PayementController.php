@@ -34,58 +34,112 @@ class PayementController extends Controller
 
     public function createPaymentIntent(Request $request)
     {
-        Stripe::setApiKey(config('services.stripe.secret'));
+        $stripeSecret = config('services.stripe.secret');
+
+        if (!$stripeSecret) {
+            Log::error('Stripe secret manquant dans config services.stripe.secret');
+
+            return response()->json([
+                'status' => 500,
+                'message' => 'Configuration Stripe manquante. Vérifiez STRIPE_SECRET dans le fichier .env.',
+            ], 500);
+        }
+
+        Stripe::setApiKey($stripeSecret);
 
         $request->validate([
             'reservation_id' => 'required|exists:reservations,id',
         ]);
 
-        $reservation = Reservation::with(['annonce', 'intervenant'])->findOrFail($request->reservation_id);
+        $reservation = Reservation::with(['annonce', 'intervenant'])
+            ->findOrFail($request->reservation_id);
 
         if ((int) $reservation->client_id !== (int) auth()->id()) {
-            return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
+            return response()->json([
+                'status' => 403,
+                'message' => 'Non autorisé',
+            ], 403);
         }
 
         if ($reservation->is_paid || $reservation->payment_status === 'paid') {
-            return response()->json(['status' => 400, 'message' => 'Cette réservation est déjà payée'], 400);
+            return response()->json([
+                'status' => 400,
+                'message' => 'Cette réservation est déjà payée',
+            ], 400);
         }
 
         if (in_array($reservation->prestation_status, ['disputed', 'cancelled', 'refunded'], true)) {
-            return response()->json(['status' => 400, 'message' => 'Cette réservation ne peut plus être payée'], 400);
+            return response()->json([
+                'status' => 400,
+                'message' => 'Cette réservation ne peut plus être payée',
+            ], 400);
         }
 
         $amountInCents = (int) round(((float) $reservation->total_client_amount) * 100);
 
         if ($amountInCents <= 0) {
-            return response()->json(['status' => 400, 'message' => 'Montant invalide'], 400);
+            return response()->json([
+                'status' => 400,
+                'message' => 'Montant invalide',
+            ], 400);
         }
 
         if ($reservation->payment_intent_id && $reservation->payment_status === 'pending') {
-            $existingIntent = PaymentIntent::retrieve($reservation->payment_intent_id);
+            try {
+                $existingIntent = PaymentIntent::retrieve($reservation->payment_intent_id);
 
-            return response()->json([
-                'status' => 200,
-                'clientSecret' => $existingIntent->client_secret,
-                'payment_intent_id' => $existingIntent->id,
-                'amount' => $reservation->total_client_amount,
-                'currency' => $reservation->currency ?: 'eur',
-                'reservation' => $reservation,
-            ]);
+                return response()->json([
+                    'status' => 200,
+                    'clientSecret' => $existingIntent->client_secret,
+                    'payment_intent_id' => $existingIntent->id,
+                    'amount' => $reservation->total_client_amount,
+                    'currency' => $reservation->currency ?: 'eur',
+                    'reservation' => $reservation->fresh(['annonce', 'client', 'intervenant']),
+                ]);
+            } catch (\Throwable $e) {
+                Log::warning('PaymentIntent existant introuvable ou invalide', [
+                    'reservation_id' => $reservation->id,
+                    'payment_intent_id' => $reservation->payment_intent_id,
+                    'error' => $e->getMessage(),
+                ]);
+
+                $reservation->update([
+                    'payment_intent_id' => null,
+                    'payment_status' => 'unpaid',
+                ]);
+            }
         }
 
-        $paymentIntent = PaymentIntent::create([
-            'amount' => $amountInCents,
-            'currency' => $reservation->currency ?: 'eur',
-            'automatic_payment_methods' => ['enabled' => true],
-            'transfer_group' => 'reservation_' . $reservation->id,
-            'metadata' => [
+        try {
+            $paymentIntent = PaymentIntent::create([
+                'amount' => $amountInCents,
+                'currency' => $reservation->currency ?: 'eur',
+                'automatic_payment_methods' => ['enabled' => true],
+                'transfer_group' => 'reservation_' . $reservation->id,
+                'metadata' => [
+                    'reservation_id' => $reservation->id,
+                    'client_id' => $reservation->client_id,
+                    'intervenant_id' => $reservation->intervenant_id,
+                    'platform_commission_amount' => $reservation->commission_amount,
+                    'coach_amount' => $reservation->intervenant_amount,
+                ],
+            ], [
+                'idempotency_key' => 'reservation_' . $reservation->id . '_payment_intent',
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Erreur création PaymentIntent Stripe', [
                 'reservation_id' => $reservation->id,
-                'client_id' => $reservation->client_id,
-                'intervenant_id' => $reservation->intervenant_id,
-                'platform_commission_amount' => $reservation->commission_amount,
-                'coach_amount' => $reservation->intervenant_amount,
-            ],
-        ]);
+                'amount' => $amountInCents,
+                'currency' => $reservation->currency ?: 'eur',
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => 500,
+                'message' => 'Impossible d’initialiser le paiement Stripe.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
 
         $reservation->update([
             'payment_intent_id' => $paymentIntent->id,
@@ -101,15 +155,37 @@ class PayementController extends Controller
             'payment_intent_id' => $paymentIntent->id,
             'amount' => $reservation->total_client_amount,
             'currency' => $reservation->currency ?: 'eur',
-            'reservation' => $reservation,
+            'reservation' => $reservation->fresh(['annonce', 'client', 'intervenant']),
         ]);
     }
 
     public function checkPaymentStatus($paymentIntentId)
     {
-        Stripe::setApiKey(config('services.stripe.secret'));
+        $stripeSecret = config('services.stripe.secret');
 
-        $paymentIntent = PaymentIntent::retrieve($paymentIntentId);
+        if (!$stripeSecret) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Configuration Stripe manquante.',
+            ], 500);
+        }
+
+        Stripe::setApiKey($stripeSecret);
+
+        try {
+            $paymentIntent = PaymentIntent::retrieve($paymentIntentId);
+        } catch (\Throwable $e) {
+            Log::error('Erreur vérification PaymentIntent Stripe', [
+                'payment_intent_id' => $paymentIntentId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => 500,
+                'message' => 'Impossible de vérifier le paiement Stripe.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
 
         return response()->json([
             'status' => 200,
@@ -125,6 +201,7 @@ class PayementController extends Controller
 
         if (!$secret || !$sigHeader) {
             Log::warning('Stripe webhook refusé: signature ou secret manquant');
+
             return response()->json(['error' => 'Signature Stripe manquante'], 400);
         }
 
@@ -132,6 +209,7 @@ class PayementController extends Controller
             $event = Webhook::constructEvent($payload, $sigHeader, $secret);
         } catch (\Throwable $e) {
             Log::warning('Stripe webhook invalide', ['error' => $e->getMessage()]);
+
             return response()->json(['error' => 'Webhook invalide'], 400);
         }
 
@@ -223,7 +301,16 @@ class PayementController extends Controller
 
     public function createConnectOnboarding(Request $request)
     {
-        Stripe::setApiKey(config('services.stripe.secret'));
+        $stripeSecret = config('services.stripe.secret');
+
+        if (!$stripeSecret) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Configuration Stripe manquante.',
+            ], 500);
+        }
+
+        Stripe::setApiKey($stripeSecret);
 
         $user = $request->user();
 
@@ -232,15 +319,28 @@ class PayementController extends Controller
         }
 
         if (!$user->stripe_account_id) {
-            $account = Account::create([
-                'type' => 'express',
-                'email' => $user->email,
-                'country' => env('STRIPE_CONNECT_COUNTRY', 'FR'),
-                'capabilities' => [
-                    'card_payments' => ['requested' => true],
-                    'transfers' => ['requested' => true],
-                ],
-            ]);
+            try {
+                $account = Account::create([
+                    'type' => 'express',
+                    'email' => $user->email,
+                    'country' => env('STRIPE_CONNECT_COUNTRY', 'FR'),
+                    'capabilities' => [
+                        'card_payments' => ['requested' => true],
+                        'transfers' => ['requested' => true],
+                    ],
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('Erreur création compte Stripe Connect', [
+                    'user_id' => $user->id,
+                    'error' => $e->getMessage(),
+                ]);
+
+                return response()->json([
+                    'status' => 500,
+                    'message' => 'Impossible de créer le compte Stripe Connect.',
+                    'error' => $e->getMessage(),
+                ], 500);
+            }
 
             $user->update([
                 'stripe_account_id' => $account->id,
@@ -248,12 +348,26 @@ class PayementController extends Controller
             ]);
         }
 
-        $accountLink = AccountLink::create([
-            'account' => $user->stripe_account_id,
-            'refresh_url' => config('app.url') . '/api/stripe/connect/refresh',
-            'return_url' => config('app.url') . '/api/stripe/connect/return',
-            'type' => 'account_onboarding',
-        ]);
+        try {
+            $accountLink = AccountLink::create([
+                'account' => $user->stripe_account_id,
+                'refresh_url' => config('app.url') . '/api/stripe/connect/refresh',
+                'return_url' => config('app.url') . '/api/stripe/connect/return',
+                'type' => 'account_onboarding',
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Erreur création lien Stripe Connect', [
+                'user_id' => $user->id,
+                'stripe_account_id' => $user->stripe_account_id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => 500,
+                'message' => 'Impossible de générer le lien Stripe Connect.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
 
         return response()->json([
             'status' => 200,
@@ -264,7 +378,16 @@ class PayementController extends Controller
 
     public function connectStatus(Request $request)
     {
-        Stripe::setApiKey(config('services.stripe.secret'));
+        $stripeSecret = config('services.stripe.secret');
+
+        if (!$stripeSecret) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Configuration Stripe manquante.',
+            ], 500);
+        }
+
+        Stripe::setApiKey($stripeSecret);
 
         $user = $request->user();
 
@@ -276,7 +399,22 @@ class PayementController extends Controller
             ]);
         }
 
-        $account = Account::retrieve($user->stripe_account_id);
+        try {
+            $account = Account::retrieve($user->stripe_account_id);
+        } catch (\Throwable $e) {
+            Log::error('Erreur récupération statut Stripe Connect', [
+                'user_id' => $user->id,
+                'stripe_account_id' => $user->stripe_account_id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => 500,
+                'message' => 'Impossible de vérifier le compte Stripe Connect.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+
         $completed = (bool) ($account->charges_enabled && $account->payouts_enabled);
 
         $user->update([
@@ -409,7 +547,16 @@ class PayementController extends Controller
 
     public function transferToCoach($id)
     {
-        Stripe::setApiKey(config('services.stripe.secret'));
+        $stripeSecret = config('services.stripe.secret');
+
+        if (!$stripeSecret) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Configuration Stripe manquante.',
+            ], 500);
+        }
+
+        Stripe::setApiKey($stripeSecret);
 
         $reservation = Reservation::with(['intervenant', 'payement'])->findOrFail($id);
 
@@ -515,7 +662,16 @@ class PayementController extends Controller
 
     public function refundReservation(Request $request, $id)
     {
-        Stripe::setApiKey(config('services.stripe.secret'));
+        $stripeSecret = config('services.stripe.secret');
+
+        if (!$stripeSecret) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Configuration Stripe manquante.',
+            ], 500);
+        }
+
+        Stripe::setApiKey($stripeSecret);
 
         $request->validate([
             'amount' => 'nullable|numeric|min:0.5',
