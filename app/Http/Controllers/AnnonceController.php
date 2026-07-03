@@ -34,6 +34,7 @@ class AnnonceController extends Controller
     {
         try {
             $annonces = Annonce::with('user:id,name,email,account_status')->latest()->get();
+
             return response()->json(['status' => 200, 'annonces' => $annonces]);
         } catch (\Exception $e) {
             return response()->json([
@@ -47,7 +48,11 @@ class AnnonceController extends Controller
     public function detailAnnonce($id)
     {
         try {
-            $annonce = Annonce::with(['user:id,name,photo,bio,phone,address,account_status', 'reservations'])->findOrFail($id);
+            $annonce = Annonce::with([
+                'user:id,name,photo,bio,phone,address,account_status',
+                'reservations',
+            ])->findOrFail($id);
+
             return response()->json(['status' => 200, 'annonce' => $annonce]);
         } catch (\Exception $e) {
             return response()->json([
@@ -102,6 +107,7 @@ class AnnonceController extends Controller
             if ($annonce->image && Storage::disk('public')->exists($annonce->image)) {
                 Storage::disk('public')->delete($annonce->image);
             }
+
             $data['image'] = $request->file('image')->store('annonces', 'public');
         }
 
@@ -116,9 +122,15 @@ class AnnonceController extends Controller
 
     public function validerAnnonce(Request $request, $id)
     {
-        $request->validate(['status' => 'nullable|in:valide,refuse,en_attente,brouillon']);
+        $request->validate([
+            'status' => 'nullable|in:valide,refuse,en_attente,brouillon',
+        ]);
+
         $annonce = Annonce::findOrFail($id);
-        $annonce->update(['status' => $request->status ?? 'valide']);
+
+        $annonce->update([
+            'status' => $request->status ?? 'valide',
+        ]);
 
         return response()->json([
             'status' => 200,
@@ -130,7 +142,10 @@ class AnnonceController extends Controller
     public function refuserAnnonce($id)
     {
         $annonce = Annonce::findOrFail($id);
-        $annonce->update(['status' => 'refuse']);
+
+        $annonce->update([
+            'status' => 'refuse',
+        ]);
 
         return response()->json([
             'status' => 200,
@@ -154,7 +169,10 @@ class AnnonceController extends Controller
 
         $annonce->delete();
 
-        return response()->json(['status' => 200, 'message' => 'Annonce supprimée avec succès']);
+        return response()->json([
+            'status' => 200,
+            'message' => 'Annonce supprimée avec succès',
+        ]);
     }
 
     public function reserver(Request $request, $id)
@@ -171,26 +189,45 @@ class AnnonceController extends Controller
         $annonce = Annonce::findOrFail($id);
 
         if ($annonce->status !== 'valide') {
-            return response()->json(['status' => 400, 'message' => 'Cette annonce n’est pas encore disponible à la réservation'], 400);
+            return response()->json([
+                'status' => 400,
+                'message' => 'Cette annonce n’est pas encore disponible à la réservation',
+            ], 400);
         }
 
         if ((int) $annonce->user_id === (int) $user_id) {
-            return response()->json(['status' => 400, 'message' => 'Vous ne pouvez pas réserver votre propre annonce'], 400);
+            return response()->json([
+                'status' => 400,
+                'message' => 'Vous ne pouvez pas réserver votre propre annonce',
+            ], 400);
         }
 
         $existing = Reservation::where('client_id', $user_id)
             ->where('reservation_date', $request->reservation_date)
             ->where('reservation_time', $request->reservation_time)
-            ->whereNotIn('status', ['refuse'])
+            ->whereNotIn('status', ['refuse', 'annule'])
             ->first();
 
         if ($existing) {
-            return response()->json(['status' => 400, 'message' => 'Vous avez déjà une réservation à cette heure'], 400);
+            if (!$existing->is_paid && in_array($existing->payment_status, ['unpaid', 'pending', null], true)) {
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Réservation déjà créée. Vous pouvez continuer le paiement.',
+                    'already_exists' => true,
+                    'reservation' => $existing->load(['annonce', 'client', 'intervenant']),
+                ]);
+            }
+
+            return response()->json([
+                'status' => 400,
+                'message' => 'Vous avez déjà une réservation à cette heure',
+            ], 400);
         }
 
         $price = (float) $annonce->price;
         $serviceFeeRate = (float) BusinessSetting::value('client_service_fee_rate', 5);
         $commissionRate = (float) BusinessSetting::value('intervenant_commission_rate', 12);
+
         $serviceFeeAmount = round($price * $serviceFeeRate / 100, 2);
         $commissionAmount = round($price * $commissionRate / 100, 2);
         $intervenantAmount = round($price - $commissionAmount, 2);
@@ -215,18 +252,24 @@ class AnnonceController extends Controller
             'status' => 'attente',
             'is_paid' => false,
             'payment_status' => 'unpaid',
+            'prestation_status' => 'pending_payment',
+            'payout_status' => 'pending',
         ]);
 
         return response()->json([
             'status' => 200,
             'message' => 'Réservation créée avec succès. Le client doit maintenant payer.',
+            'already_exists' => false,
             'reservation' => $reservation->load(['annonce', 'client', 'intervenant']),
         ]);
     }
 
     public function boost(Request $request, $id)
     {
-        $request->validate(['days' => 'nullable|integer|min:1|max:365']);
+        $request->validate([
+            'days' => 'nullable|integer|min:1|max:365',
+        ]);
+
         $annonce = Annonce::findOrFail($id);
 
         if ((int) $annonce->user_id !== (int) Auth::id()) {
@@ -238,7 +281,11 @@ class AnnonceController extends Controller
             'boost_until' => now()->addDays($request->days ?? 7),
         ]);
 
-        return response()->json(['status' => 200, 'message' => 'Annonce boostée', 'annonce' => $annonce]);
+        return response()->json([
+            'status' => 200,
+            'message' => 'Annonce boostée',
+            'annonce' => $annonce,
+        ]);
     }
 
     private function validateAnnonce(Request $request, bool $required = true): array
