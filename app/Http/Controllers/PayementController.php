@@ -459,14 +459,21 @@ class PayementController extends Controller
 
         $reservation->update([
             'prestation_status' => 'validated',
+            'payout_status' => 'pending',
             'status' => 'confirme',
             'validated_at' => now(),
             'validated_by' => $request->user()?->id,
         ]);
 
+        if ($reservation->payement) {
+            $reservation->payement->update([
+                'payout_status' => 'pending',
+            ]);
+        }
+
         return response()->json([
             'status' => 200,
-            'message' => 'Prestation validée',
+            'message' => 'Prestation validée. Le reversement coach peut être déclenché par l’administration.',
             'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
         ]);
     }
@@ -486,14 +493,21 @@ class PayementController extends Controller
 
         $reservation->update([
             'prestation_status' => 'validated',
+            'payout_status' => 'pending',
             'status' => 'confirme',
             'validated_at' => now(),
             'validated_by' => $request->user()->id,
         ]);
 
+        if ($reservation->payement) {
+            $reservation->payement->update([
+                'payout_status' => 'pending',
+            ]);
+        }
+
         return response()->json([
             'status' => 200,
-            'message' => 'Prestation confirmée. Le reversement coach peut être déclenché.',
+            'message' => 'Prestation confirmée. Le reversement coach peut être déclenché par l’administration.',
             'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
         ]);
     }
@@ -813,7 +827,7 @@ class PayementController extends Controller
 
         return response()->json([
             'status' => 200,
-            'message' => 'Litige clôturé : prestation validée. Le reversement coach peut être déclenché.',
+            'message' => 'Litige clôturé : prestation validée. Le reversement coach peut être déclenché par l’administration.',
             'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
         ]);
     }
