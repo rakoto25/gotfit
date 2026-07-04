@@ -148,4 +148,19 @@ class User extends Authenticatable
     {
         return $this->hasMany(Review::class, 'intervenant_id');
     }
+
+    public function clientNotes(): HasMany
+    {
+        return $this->hasMany(ClientNote::class, 'client_id');
+    }
+
+    public function authoredClientNotes(): HasMany
+    {
+        return $this->hasMany(ClientNote::class, 'author_id');
+    }
+
+    public function clientOnboarding()
+    {
+        return $this->hasOne(ClientOnboarding::class, 'client_id');
+    }
 }
