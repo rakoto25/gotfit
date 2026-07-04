@@ -89,4 +89,9 @@ class Reservation extends Model
     {
         return $this->hasOne(Review::class);
     }
+
+    public function notes()
+    {
+        return $this->hasMany(ClientNote::class);
+    }
 }
