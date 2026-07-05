@@ -3,6 +3,7 @@
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminMessageController;
 use App\Http\Controllers\AnnonceController;
+use App\Http\Controllers\ClientJourneyController;
 use App\Http\Controllers\ConnexionController;
 use App\Http\Controllers\ContactController;
 use App\Http\Controllers\DocumentController;
@@ -20,8 +21,6 @@ use Illuminate\Support\Facades\Route;
 /*
 |--------------------------------------------------------------------------
 | DEBUG TEMPORAIRE AUTHORIZATION HEADER
-|--------------------------------------------------------------------------
-| À supprimer après correction du problème 401.
 |--------------------------------------------------------------------------
 */
 
@@ -84,45 +83,15 @@ Route::post('/reset-password', [ConnexionController::class, 'resetPassword']);
 Route::get('/annonces', [AnnonceController::class, 'index']);
 Route::get('/annonces/{id}/detail', [AnnonceController::class, 'detailAnnonce'])->whereNumber('id');
 
-/*
-|--------------------------------------------------------------------------
-| INTERVENANTS PUBLICS
-|--------------------------------------------------------------------------
-*/
-
 Route::get('/intervenants', [ProfileController::class, 'publicIntervenants']);
 Route::get('/intervenants/{id}/reviews', [ReviewController::class, 'byIntervenant'])->whereNumber('id');
 
-/*
-|--------------------------------------------------------------------------
-| MISSIONS PUBLIQUES
-|--------------------------------------------------------------------------
-*/
-
 Route::get('/missions', [MissionController::class, 'index']);
-
-/*
-|--------------------------------------------------------------------------
-| CONTACT PUBLIC
-|--------------------------------------------------------------------------
-*/
 
 Route::post('/contact', [ContactController::class, 'send'])
     ->middleware('throttle:5,1');
 
-/*
-|--------------------------------------------------------------------------
-| STRIPE WEBHOOK PUBLIC
-|--------------------------------------------------------------------------
-*/
-
 Route::post('/payment/webhook', [PayementController::class, 'handleWebhook']);
-
-/*
-|--------------------------------------------------------------------------
-| RETOURS PUBLICS STRIPE CONNECT
-|--------------------------------------------------------------------------
-*/
 
 Route::get('/stripe/connect/return', [PayementController::class, 'connectReturn']);
 Route::get('/stripe/connect/refresh', [PayementController::class, 'connectRefresh']);
@@ -139,31 +108,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/profile', [ProfileController::class, 'show']);
     Route::post('/profile/update', [ProfileController::class, 'update']);
 
-    /*
-    |--------------------------------------------------------------------------
-    | STRIPE CONNECT INTERVENANT
-    |--------------------------------------------------------------------------
-    */
-
     Route::post('/stripe/connect/onboarding', [PayementController::class, 'createConnectOnboarding']);
     Route::get('/stripe/connect/status', [PayementController::class, 'connectStatus']);
-
-    /*
-    |--------------------------------------------------------------------------
-    | FAVORIS
-    |--------------------------------------------------------------------------
-    */
 
     Route::get('/favorites', [FavoriteController::class, 'index']);
     Route::post('/favorites/{annonce}', [FavoriteController::class, 'store'])->whereNumber('annonce');
     Route::delete('/favorites/annonce/{annonce}', [FavoriteController::class, 'destroyByAnnonce'])->whereNumber('annonce');
     Route::delete('/favorites/{id}', [FavoriteController::class, 'destroy'])->whereNumber('id');
-
-    /*
-    |--------------------------------------------------------------------------
-    | MESSAGERIE UTILISATEUR
-    |--------------------------------------------------------------------------
-    */
 
     Route::get('/message/contacts', [MessageController::class, 'contacts']);
 
@@ -183,32 +134,45 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/message/{message_id}/reaction', [MessageController::class, 'removeReaction'])
         ->whereNumber('message_id');
 
-    /*
-    |--------------------------------------------------------------------------
-    | ANCIENNES ROUTES MESSAGERIE GARDÉES TEMPORAIREMENT
-    |--------------------------------------------------------------------------
-    */
-
     Route::get('/conversation/{id}/create', [MessageController::class, 'createConversation'])
         ->whereNumber('id');
 
     Route::post('/message/{id}/send', [MessageController::class, 'sendMessage'])
         ->whereNumber('id');
 
-    /*
-    |--------------------------------------------------------------------------
-    | DOCUMENTS UTILISATEUR
-    |--------------------------------------------------------------------------
-    */
-
     Route::get('/documents/my', [DocumentController::class, 'myDocuments']);
     Route::post('/documents', [DocumentController::class, 'store']);
 
     /*
     |--------------------------------------------------------------------------
-    | RÉSERVATION GÉNÉRIQUE
+    | PARCOURS CLIENT / COACH
     |--------------------------------------------------------------------------
     */
+
+    Route::get('/clients/{client}/history', [ClientJourneyController::class, 'history'])
+        ->whereNumber('client');
+
+    Route::get('/clients/{client}/notes', [ClientJourneyController::class, 'notes'])
+        ->whereNumber('client');
+
+    Route::post('/clients/{client}/notes', [ClientJourneyController::class, 'storeNote'])
+        ->whereNumber('client');
+
+    Route::put('/client-notes/{note}', [ClientJourneyController::class, 'updateNote'])
+        ->whereNumber('note');
+
+    Route::patch('/client-notes/{note}', [ClientJourneyController::class, 'updateNote'])
+        ->whereNumber('note');
+
+    Route::delete('/client-notes/{note}', [ClientJourneyController::class, 'deleteNote'])
+        ->whereNumber('note');
+
+    Route::get('/clients/{client}/onboarding', [ClientJourneyController::class, 'showOnboarding'])
+        ->whereNumber('client');
+
+    Route::get('/client/onboarding', [ClientJourneyController::class, 'myOnboarding']);
+    Route::put('/client/onboarding', [ClientJourneyController::class, 'saveMyOnboarding']);
+    Route::patch('/client/onboarding', [ClientJourneyController::class, 'saveMyOnboarding']);
 
     Route::get('/reservation/{id}', [ReservationController::class, 'show'])->whereNumber('id');
 });
@@ -220,19 +184,7 @@ Route::middleware('auth:sanctum')->group(function () {
 */
 
 Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
-    /*
-    |--------------------------------------------------------------------------
-    | DASHBOARD ADMIN
-    |--------------------------------------------------------------------------
-    */
-
     Route::get('/admin/dashboard', [AdminController::class, 'dashboard']);
-
-    /*
-    |--------------------------------------------------------------------------
-    | UTILISATEURS ADMIN
-    |--------------------------------------------------------------------------
-    */
 
     Route::get('/users', [AdminController::class, 'getUsers']);
 
@@ -246,12 +198,6 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
 
     Route::put('/users/{id}/validate', [AdminController::class, 'validateUser'])->whereNumber('id');
 
-    /*
-    |--------------------------------------------------------------------------
-    | MESSAGERIE ADMIN
-    |--------------------------------------------------------------------------
-    */
-
     Route::get('/admin/messages', [AdminMessageController::class, 'index']);
     Route::get('/messages', [AdminMessageController::class, 'index']);
 
@@ -263,33 +209,15 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
 
     Route::delete('/admin/messages/{id}', [AdminMessageController::class, 'destroy'])->whereNumber('id');
 
-    /*
-    |--------------------------------------------------------------------------
-    | ANNONCES ADMIN
-    |--------------------------------------------------------------------------
-    */
-
     Route::get('/getAllAnnonce', [AnnonceController::class, 'getAllAnnonce']);
     Route::put('/annonces/{id}/valide', [AnnonceController::class, 'validerAnnonce'])->whereNumber('id');
     Route::put('/annonces/{id}/refuser', [AnnonceController::class, 'refuserAnnonce'])->whereNumber('id');
     Route::delete('/annonces/{id}', [AnnonceController::class, 'destroy'])->whereNumber('id');
 
-    /*
-    |--------------------------------------------------------------------------
-    | DOCUMENTS ADMIN
-    |--------------------------------------------------------------------------
-    */
-
     Route::get('/documents', [DocumentController::class, 'index']);
     Route::delete('/documents/{id}', [DocumentController::class, 'destroy'])->whereNumber('id');
     Route::put('/documents/{id}/valider', [DocumentController::class, 'validerDocument'])->whereNumber('id');
     Route::put('/documents/{id}/refuser', [DocumentController::class, 'refuserDocument'])->whereNumber('id');
-
-    /*
-    |--------------------------------------------------------------------------
-    | RÉSERVATIONS ADMIN
-    |--------------------------------------------------------------------------
-    */
 
     Route::get('/reservation/all', [ReservationController::class, 'getAllReservation']);
     Route::post('/reservation/{id}/validate-prestation', [PayementController::class, 'validatePrestation'])->whereNumber('id');
@@ -297,32 +225,14 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
     Route::post('/reservation/{id}/resolve-dispute', [PayementController::class, 'resolveDispute'])->whereNumber('id');
     Route::post('/reservation/{id}/refund', [PayementController::class, 'refundReservation'])->whereNumber('id');
 
-    /*
-    |--------------------------------------------------------------------------
-    | PAIEMENTS ADMIN
-    |--------------------------------------------------------------------------
-    */
-
     Route::get('/admin/payments', [PayementController::class, 'index']);
     Route::get('/payments', [PayementController::class, 'index']);
     Route::get('/payements', [PayementController::class, 'index']);
 
     Route::get('/admin/commissions', [PayementController::class, 'commissionByIntervenant']);
 
-    /*
-    |--------------------------------------------------------------------------
-    | PARAMÈTRES BUSINESS ADMIN
-    |--------------------------------------------------------------------------
-    */
-
     Route::get('/admin/business-settings', [AdminController::class, 'businessSettings']);
     Route::put('/admin/business-settings', [AdminController::class, 'updateBusinessSettings']);
-
-    /*
-    |--------------------------------------------------------------------------
-    | AVIS ADMIN
-    |--------------------------------------------------------------------------
-    */
 
     Route::put('/admin/reviews/{id}/moderate', [ReviewController::class, 'moderate'])->whereNumber('id');
 });
