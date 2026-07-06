@@ -529,35 +529,69 @@ class VisioSessionController extends Controller
         return $roomName;
     }
 
-    private function makeVideoToken(VisioSession $session, User $user, string $role): string
-    {
-        $now = time();
-        $secret = config('services.visio.secret') ?: config('app.key');
+private function makeVideoToken(VisioSession $session, User $user, string $role): string
+{
+    $now = time();
+    $provider = strtolower((string) ($session->provider ?: config('services.visio.provider', 'livekit')));
 
-        if (Str::startsWith($secret, 'base64:')) {
-            $secret = base64_decode(Str::after($secret, 'base64:'), true) ?: $secret;
+    if ($provider === 'livekit') {
+        $apiKey = config('services.visio.api_key');
+        $apiSecret = config('services.visio.api_secret');
+
+        if (!$apiKey || !$apiSecret) {
+            abort(500, 'Configuration LiveKit manquante : VISIO_API_KEY ou VISIO_API_SECRET.');
         }
 
         $payload = [
-            'iss' => config('app.name', 'GotFit'),
+            'iss' => $apiKey,
             'sub' => (string) $user->id,
             'name' => $user->name,
-            'role' => $role,
-            'room' => $session->room_name,
-            'session_id' => $session->id,
             'iat' => $now,
             'nbf' => $now - 10,
             'exp' => $now + (int) config('services.visio.token_ttl', 3600),
-            'permissions' => [
-                'can_join' => true,
-                'can_publish' => true,
-                'can_subscribe' => true,
-                'can_admin' => $role === 'coach',
+            'video' => [
+                'room' => $session->room_name,
+                'roomJoin' => true,
+                'canPublish' => true,
+                'canSubscribe' => true,
+                'roomAdmin' => $role === 'coach',
             ],
+            'metadata' => json_encode([
+                'user_id' => $user->id,
+                'session_id' => $session->id,
+                'role' => $role,
+            ]),
         ];
 
-        return $this->encodeJwt($payload, $secret);
+        return $this->encodeJwt($payload, $apiSecret);
     }
+
+    $secret = config('services.visio.secret') ?: config('app.key');
+
+    if (Str::startsWith($secret, 'base64:')) {
+        $secret = base64_decode(Str::after($secret, 'base64:'), true) ?: $secret;
+    }
+
+    $payload = [
+        'iss' => config('app.name', 'GotFit'),
+        'sub' => (string) $user->id,
+        'name' => $user->name,
+        'role' => $role,
+        'room' => $session->room_name,
+        'session_id' => $session->id,
+        'iat' => $now,
+        'nbf' => $now - 10,
+        'exp' => $now + (int) config('services.visio.token_ttl', 3600),
+        'permissions' => [
+            'can_join' => true,
+            'can_publish' => true,
+            'can_subscribe' => true,
+            'can_admin' => $role === 'coach',
+        ],
+    ];
+
+    return $this->encodeJwt($payload, $secret);
+}
 
     private function encodeJwt(array $payload, string $secret): string
     {
