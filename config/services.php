@@ -38,4 +38,11 @@ return [
         'validation_delay_hours' => env('STRIPE_VALIDATION_DELAY_HOURS', 72),
     ],
 
+    'visio' => [
+        'provider' => env('VISIO_PROVIDER', 'gotfit'),
+        'server_url' => env('VISIO_SERVER_URL'),
+        'secret' => env('VISIO_SECRET'),
+        'token_ttl' => env('VISIO_TOKEN_TTL', 3600),
+    ],
+
 ];

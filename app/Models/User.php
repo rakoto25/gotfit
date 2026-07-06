@@ -163,4 +163,14 @@ class User extends Authenticatable
     {
         return $this->hasOne(ClientOnboarding::class, 'client_id');
     }
+
+    public function visioSessionsAsCoach(): HasMany
+    {
+        return $this->hasMany(VisioSession::class, 'coach_id');
+    }
+
+    public function visioParticipations(): HasMany
+    {
+        return $this->hasMany(VisioParticipant::class);
+    }
 }

@@ -15,6 +15,7 @@ use App\Http\Controllers\PayementController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ReservationController;
 use App\Http\Controllers\ReviewController;
+use App\Http\Controllers\VisioSessionController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -87,6 +88,9 @@ Route::get('/intervenants', [ProfileController::class, 'publicIntervenants']);
 Route::get('/intervenants/{id}/reviews', [ReviewController::class, 'byIntervenant'])->whereNumber('id');
 
 Route::get('/missions', [MissionController::class, 'index']);
+
+Route::get('/visio/sessions', [VisioSessionController::class, 'index']);
+Route::get('/visio/sessions/{id}', [VisioSessionController::class, 'show'])->whereNumber('id');
 
 Route::post('/contact', [ContactController::class, 'send'])
     ->middleware('throttle:5,1');
@@ -175,6 +179,27 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/client/onboarding', [ClientJourneyController::class, 'saveMyOnboarding']);
 
     Route::get('/reservation/{id}', [ReservationController::class, 'show'])->whereNumber('id');
+
+    /*
+    |--------------------------------------------------------------------------
+    | VISIO - Coach + participants
+    |--------------------------------------------------------------------------
+    */
+
+    Route::get('/visio/my-sessions', [VisioSessionController::class, 'index']);
+    Route::post('/visio/sessions', [VisioSessionController::class, 'store']);
+    Route::put('/visio/sessions/{id}', [VisioSessionController::class, 'update'])->whereNumber('id');
+    Route::patch('/visio/sessions/{id}', [VisioSessionController::class, 'update'])->whereNumber('id');
+    Route::post('/visio/sessions/{id}/reserve', [VisioSessionController::class, 'reserve'])->whereNumber('id');
+    Route::post('/visio/sessions/{id}/start', [VisioSessionController::class, 'start'])->whereNumber('id');
+    Route::post('/visio/sessions/{id}/join', [VisioSessionController::class, 'join'])->whereNumber('id');
+    Route::post('/visio/sessions/{id}/leave', [VisioSessionController::class, 'leave'])->whereNumber('id');
+    Route::post('/visio/sessions/{id}/end', [VisioSessionController::class, 'end'])->whereNumber('id');
+    Route::post('/visio/sessions/{id}/cancel', [VisioSessionController::class, 'cancel'])->whereNumber('id');
+    Route::get('/visio/sessions/{id}/participants', [VisioSessionController::class, 'participants'])->whereNumber('id');
+    Route::post('/visio/sessions/{id}/participants/{participantId}/paid', [VisioSessionController::class, 'markParticipantPaid'])
+        ->whereNumber('id')
+        ->whereNumber('participantId');
 });
 
 /*
