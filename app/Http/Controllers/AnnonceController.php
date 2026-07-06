@@ -5,8 +5,10 @@ namespace App\Http\Controllers;
 use App\Models\Annonce;
 use App\Models\BusinessSetting;
 use App\Models\Reservation;
+use App\Notifications\ReservationStatusNotification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 class AnnonceController extends Controller
@@ -200,6 +202,20 @@ class AnnonceController extends Controller
             return response()->json(['status' => 400, 'message' => 'Vous avez déjà une réservation à cette heure'], 400);
         }
 
+        $coachConflict = Reservation::where('intervenant_id', $annonce->user_id)
+            ->where('reservation_date', $request->reservation_date)
+            ->where('reservation_time', $request->reservation_time)
+            ->whereNotIn('status', ['refuse', 'annule'])
+            ->whereNotIn('payment_status', ['failed', 'refunded'])
+            ->first();
+
+        if ($coachConflict) {
+            return response()->json([
+                'status' => 400,
+                'message' => 'Ce créneau n’est plus disponible pour ce coach.',
+            ], 400);
+        }
+
         $price = (float) $annonce->price;
         $serviceFeeRate = (float) BusinessSetting::value('client_service_fee_rate', 5);
         $commissionRate = (float) BusinessSetting::value('intervenant_commission_rate', 12);
@@ -231,11 +247,14 @@ class AnnonceController extends Controller
             'payout_status' => 'pending',
         ]);
 
+        $reservation->load(['annonce', 'client', 'intervenant']);
+        $this->notifyReservationUsers($reservation, 'created');
+
         return response()->json([
             'status' => 200,
             'message' => 'Réservation créée avec succès. Le client doit maintenant payer.',
             'already_exists' => false,
-            'reservation' => $reservation->load(['annonce', 'client', 'intervenant']),
+            'reservation' => $reservation,
         ]);
     }
 
@@ -277,5 +296,23 @@ class AnnonceController extends Controller
             'available_hours' => 'nullable|array',
             'image' => 'nullable|image|mimes:jpg,jpeg,png,webp|max:4096',
         ]);
+    }
+
+    private function notifyReservationUsers(Reservation $reservation, string $event, ?string $message = null): void
+    {
+        foreach ([$reservation->client, $reservation->intervenant] as $user) {
+            if ($user && $user->email) {
+                try {
+                    $user->notify(new ReservationStatusNotification($reservation, $event, $message));
+                } catch (\Throwable $e) {
+                    Log::warning('Notification réservation non envoyée', [
+                        'reservation_id' => $reservation->id,
+                        'user_id' => $user->id,
+                        'event' => $event,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
     }
 }

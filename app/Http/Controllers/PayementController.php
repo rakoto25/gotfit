@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Payement;
 use App\Models\Reservation;
+use App\Notifications\ReservationStatusNotification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -151,8 +152,6 @@ class PayementController extends Controller
             DB::transaction(function () use ($intent, $reservation) {
                 $amount = ($intent->amount_received ?? $intent->amount) / 100;
                 $chargeId = is_string($intent->latest_charge ?? null) ? $intent->latest_charge : null;
-                $validationDelay = (int) config('services.stripe.validation_delay_hours', 72);
-
                 Payement::updateOrCreate(
                     ['payment_intent_id' => $intent->id],
                     [
@@ -180,9 +179,12 @@ class PayementController extends Controller
                     'payment_intent_id' => $intent->id,
                     'stripe_charge_id' => $chargeId,
                     'paid_at' => now(),
-                    'validation_deadline' => now()->addHours($validationDelay),
+                    'validation_deadline' => null,
                 ]);
             });
+
+            $reservation->load(['client', 'intervenant', 'annonce', 'payement']);
+            $this->notifyReservationUsers($reservation, 'paid');
         }
 
         if (($event->type ?? null) === 'payment_intent.payment_failed') {
@@ -190,11 +192,17 @@ class PayementController extends Controller
             $reservationId = $intent->metadata->reservation_id ?? null;
 
             if ($reservationId) {
-                Reservation::where('id', $reservationId)->update([
+                $reservation = Reservation::with(['client', 'intervenant', 'annonce', 'payement'])->find($reservationId);
+
+                $reservation?->update([
                     'payment_status' => 'failed',
                     'prestation_status' => 'payment_failed',
                     'payout_status' => 'failed',
                 ]);
+
+                if ($reservation) {
+                    $this->notifyReservationUsers($reservation->fresh(['client', 'intervenant', 'annonce', 'payement']), 'payment_failed');
+                }
             }
         }
 
@@ -324,10 +332,13 @@ class PayementController extends Controller
             'validated_by' => $request->user()?->id,
         ]);
 
+        $reservation = $reservation->fresh(['client', 'intervenant', 'payement', 'annonce']);
+        $this->notifyReservationUsers($reservation, 'validated');
+
         return response()->json([
             'status' => 200,
             'message' => 'Prestation validée',
-            'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
+            'reservation' => $reservation,
         ]);
     }
 
@@ -350,10 +361,13 @@ class PayementController extends Controller
             'validated_by' => $request->user()->id,
         ]);
 
+        $reservation = $reservation->fresh(['client', 'intervenant', 'payement', 'annonce']);
+        $this->notifyReservationUsers($reservation, 'validated');
+
         return response()->json([
             'status' => 200,
             'message' => 'Prestation confirmée. Le reversement coach peut être déclenché.',
-            'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
+            'reservation' => $reservation,
         ]);
     }
 
@@ -388,10 +402,13 @@ class PayementController extends Controller
             'dispute_reason' => $request->reason,
         ]);
 
+        $reservation = $reservation->fresh(['client', 'intervenant', 'payement', 'annonce']);
+        $this->notifyReservationUsers($reservation, 'disputed');
+
         return response()->json([
             'status' => 200,
             'message' => 'Litige envoyé. Le reversement coach est bloqué en attendant la décision admin.',
-            'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
+            'reservation' => $reservation,
         ]);
     }
 
@@ -490,11 +507,14 @@ class PayementController extends Controller
             ]);
         }
 
+        $reservation = $reservation->fresh(['client', 'intervenant', 'payement', 'annonce']);
+        $this->notifyReservationUsers($reservation, 'transferred');
+
         return response()->json([
             'status' => 200,
             'message' => 'Reversement coach effectué',
             'transfer_id' => $transfer->id,
-            'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
+            'reservation' => $reservation,
         ]);
     }
 
@@ -580,11 +600,14 @@ class PayementController extends Controller
             ]);
         }
 
+        $reservation = $reservation->fresh(['client', 'intervenant', 'payement', 'annonce']);
+        $this->notifyReservationUsers($reservation, 'refunded');
+
         return response()->json([
             'status' => 200,
             'message' => $isFullRefund ? 'Réservation remboursée' : 'Réservation remboursée partiellement',
             'refund_id' => $refund->id,
-            'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
+            'reservation' => $reservation,
         ]);
     }
 
@@ -613,10 +636,13 @@ class PayementController extends Controller
                 'resolution_note' => $request->admin_note,
             ]);
 
+            $reservation = $reservation->fresh(['client', 'intervenant', 'payement', 'annonce']);
+            $this->notifyReservationUsers($reservation, 'cancelled');
+
             return response()->json([
                 'status' => 200,
                 'message' => 'Litige clôturé : réservation annulée sans reversement',
-                'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
+                'reservation' => $reservation,
             ]);
         }
 
@@ -629,10 +655,13 @@ class PayementController extends Controller
             'resolution_note' => $request->admin_note,
         ]);
 
+        $reservation = $reservation->fresh(['client', 'intervenant', 'payement', 'annonce']);
+        $this->notifyReservationUsers($reservation, 'validated');
+
         return response()->json([
             'status' => 200,
             'message' => 'Litige clôturé : prestation validée',
-            'reservation' => $reservation->fresh(['client', 'intervenant', 'payement']),
+            'reservation' => $reservation,
         ]);
     }
 
@@ -681,6 +710,30 @@ class PayementController extends Controller
             return response()->json(['status' => 400, 'message' => 'La prestation est bloquée par un litige ou un remboursement'], 400);
         }
 
+        $reservation->loadMissing('annonce');
+
+        if ($reservation->status !== 'realise' && !$reservation->hasSessionPassed()) {
+            return response()->json(['status' => 400, 'message' => 'La prestation ne peut être validée qu’après la séance'], 400);
+        }
+
         return null;
+    }
+
+    private function notifyReservationUsers(Reservation $reservation, string $event, ?string $message = null): void
+    {
+        foreach ([$reservation->client, $reservation->intervenant] as $user) {
+            if ($user && $user->email) {
+                try {
+                    $user->notify(new ReservationStatusNotification($reservation, $event, $message));
+                } catch (\Throwable $e) {
+                    Log::warning('Notification réservation non envoyée', [
+                        'reservation_id' => $reservation->id,
+                        'user_id' => $user->id,
+                        'event' => $event,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
@@ -64,6 +65,32 @@ class Reservation extends Model
         'intervenant_amount' => 'decimal:2',
         'total_client_amount' => 'decimal:2',
     ];
+
+    public function scheduledAt(): Carbon
+    {
+        $date = $this->reservation_date instanceof Carbon
+            ? $this->reservation_date->format('Y-m-d')
+            : Carbon::parse($this->reservation_date)->format('Y-m-d');
+
+        return Carbon::parse($date . ' ' . $this->reservation_time);
+    }
+
+    public function endsAt(): Carbon
+    {
+        $duration = (int) ($this->annonce?->duration ?: 60);
+
+        return $this->scheduledAt()->copy()->addMinutes(max($duration, 15));
+    }
+
+    public function hasSessionPassed(): bool
+    {
+        return now()->greaterThanOrEqualTo($this->endsAt());
+    }
+
+    public function calendarTitle(): string
+    {
+        return $this->annonce?->titre ?: 'Séance GotFit';
+    }
 
     public function annonce()
     {
