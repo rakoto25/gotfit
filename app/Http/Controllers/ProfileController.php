@@ -34,6 +34,7 @@ class ProfileController extends Controller
         Log::info('PROFILE UPDATE FILES', [
             'has_photo' => $request->hasFile('photo'),
             'has_cover_photo' => $request->hasFile('cover_photo'),
+            'has_presentation_video' => $request->hasFile('presentation_video'),
             'all_files' => array_keys($request->allFiles()),
         ]);
 
@@ -50,13 +51,44 @@ class ProfileController extends Controller
             'password' => ['nullable', 'string', 'min:6'],
 
             'bio' => ['nullable', 'string', 'max:1000'],
+            'coach_title' => ['nullable', 'string', 'max:255'],
+            'coach_short_description' => ['nullable', 'string', 'max:500'],
+            'coach_speciality' => ['nullable', 'string', 'max:255'],
+            'coach_experience_years' => ['nullable', 'integer', 'min:0', 'max:80'],
+            'coach_certifications' => ['nullable', 'string', 'max:2000'],
+            'coach_languages' => ['nullable', 'string', 'max:500'],
             'phone' => ['nullable', 'string', 'max:50'],
             'address' => ['nullable', 'string', 'max:255'],
 
             'photo' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'cover_photo' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:4096'],
+            'presentation_video' => ['nullable', 'file', 'mimetypes:video/mp4,video/quicktime,video/webm,video/x-matroska', 'mimes:mp4,mov,webm,mkv', 'max:51200'],
+            'remove_presentation_video' => ['nullable', 'boolean'],
             'fcm_token' => ['nullable', 'string'],
         ]);
+
+        $presentationVideoDuration = null;
+
+        if ($request->hasFile('presentation_video')) {
+            $presentationVideoDuration = $this->getVideoDurationInSeconds($request->file('presentation_video')->getRealPath());
+
+            if ($presentationVideoDuration === null) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Impossible de vérifier la durée de la vidéo. Installez ffprobe/ffmpeg sur le serveur pour limiter la vidéo à 60 secondes.',
+                ], 422);
+            }
+
+            if ($presentationVideoDuration > 60) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'La vidéo de présentation ne doit pas dépasser 60 secondes.',
+                    'errors' => [
+                        'presentation_video' => ['La vidéo de présentation ne doit pas dépasser 60 secondes.'],
+                    ],
+                ], 422);
+            }
+        }
 
         $data = [
             'name' => $request->name,
@@ -68,6 +100,19 @@ class ProfileController extends Controller
 
         if (Schema::hasColumn('users', 'fcm_token')) {
             $data['fcm_token'] = $request->fcm_token;
+        }
+
+        foreach ([
+            'coach_title',
+            'coach_short_description',
+            'coach_speciality',
+            'coach_experience_years',
+            'coach_certifications',
+            'coach_languages',
+        ] as $column) {
+            if (Schema::hasColumn('users', $column)) {
+                $data[$column] = $request->{$column};
+            }
         }
 
         if ($request->filled('password')) {
@@ -99,6 +144,25 @@ class ProfileController extends Controller
 
             if (Schema::hasColumn('users', 'cover_photo')) {
                 $data['cover_photo'] = $request->file('cover_photo')->store('covers', 'public');
+            }
+        }
+
+        if ($request->boolean('remove_presentation_video') && Schema::hasColumn('users', 'presentation_video')) {
+            $this->deleteStoredUserFile($user, 'presentation_video');
+            $data['presentation_video'] = null;
+
+            if (Schema::hasColumn('users', 'presentation_video_duration_seconds')) {
+                $data['presentation_video_duration_seconds'] = null;
+            }
+        }
+
+        if ($request->hasFile('presentation_video') && Schema::hasColumn('users', 'presentation_video')) {
+            $this->deleteStoredUserFile($user, 'presentation_video');
+
+            $data['presentation_video'] = $request->file('presentation_video')->store('coach-videos', 'public');
+
+            if (Schema::hasColumn('users', 'presentation_video_duration_seconds')) {
+                $data['presentation_video_duration_seconds'] = (int) ceil($presentationVideoDuration);
             }
         }
 
@@ -181,6 +245,17 @@ class ProfileController extends Controller
             'cover_photo' => $this->getUserValue($user, 'cover_photo'),
             'cover_photo_url' => $this->getCoverPhotoUrl($user),
 
+            'presentation_video' => $this->getUserValue($user, 'presentation_video'),
+            'presentation_video_url' => $this->getPresentationVideoUrl($user),
+            'presentation_video_duration_seconds' => $this->getUserValue($user, 'presentation_video_duration_seconds'),
+
+            'coach_title' => $this->getUserValue($user, 'coach_title'),
+            'coach_short_description' => $this->getUserValue($user, 'coach_short_description'),
+            'coach_speciality' => $this->getUserValue($user, 'coach_speciality'),
+            'coach_experience_years' => $this->getUserValue($user, 'coach_experience_years'),
+            'coach_certifications' => $this->getUserValue($user, 'coach_certifications'),
+            'coach_languages' => $this->getUserValue($user, 'coach_languages'),
+
             'created_at' => $user->created_at,
             'updated_at' => $user->updated_at,
         ];
@@ -206,21 +281,35 @@ class ProfileController extends Controller
             'cover_photo' => $this->getUserValue($user, 'cover_photo'),
             'cover_photo_url' => $this->getCoverPhotoUrl($user),
 
+            'presentation_video' => $this->getUserValue($user, 'presentation_video'),
+            'presentation_video_url' => $this->getPresentationVideoUrl($user),
+            'presentation_video_duration_seconds' => $this->getUserValue($user, 'presentation_video_duration_seconds'),
+
+            'coach_title' => $this->getUserValue($user, 'coach_title'),
+            'coach_short_description' => $this->getUserValue($user, 'coach_short_description'),
+            'coach_speciality' => $this->getUserValue($user, 'coach_speciality'),
+            'coach_experience_years' => $this->getUserValue($user, 'coach_experience_years'),
+            'coach_certifications' => $this->getUserValue($user, 'coach_certifications'),
+            'coach_languages' => $this->getUserValue($user, 'coach_languages'),
+
             'account_status' => $this->getUserValue($user, 'account_status'),
 
             'speciality' => $this->getFirstAvailableUserValue($user, [
+                'coach_speciality',
                 'speciality',
                 'specialty',
                 'service',
             ], 'Bien-être'),
 
             'specialty' => $this->getFirstAvailableUserValue($user, [
+                'coach_speciality',
                 'specialty',
                 'speciality',
                 'service',
             ], 'Bien-être'),
 
             'service' => $this->getFirstAvailableUserValue($user, [
+                'coach_speciality',
                 'service',
                 'speciality',
                 'specialty',
@@ -284,5 +373,55 @@ class ProfileController extends Controller
         }
 
         return null;
+    }
+
+    private function getPresentationVideoUrl(User $user)
+    {
+        if (Schema::hasColumn('users', 'presentation_video_url') && !empty($user->presentation_video_url)) {
+            return $user->presentation_video_url;
+        }
+
+        if (Schema::hasColumn('users', 'presentation_video') && !empty($user->presentation_video)) {
+            return asset('storage/' . $user->presentation_video);
+        }
+
+        return null;
+    }
+
+    private function deleteStoredUserFile(User $user, string $column): void
+    {
+        if (
+            Schema::hasColumn('users', $column) &&
+            !empty($user->{$column}) &&
+            Storage::disk('public')->exists($user->{$column})
+        ) {
+            Storage::disk('public')->delete($user->{$column});
+        }
+    }
+
+    private function getVideoDurationInSeconds(string $path): ?float
+    {
+        if (!function_exists('shell_exec')) {
+            return null;
+        }
+
+        $ffprobe = trim((string) shell_exec('command -v ffprobe 2>/dev/null'));
+
+        if ($ffprobe === '') {
+            return null;
+        }
+
+        $command = escapeshellcmd($ffprobe)
+            . ' -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 '
+            . escapeshellarg($path)
+            . ' 2>/dev/null';
+
+        $output = trim((string) shell_exec($command));
+
+        if ($output === '' || !is_numeric($output)) {
+            return null;
+        }
+
+        return (float) $output;
     }
 }

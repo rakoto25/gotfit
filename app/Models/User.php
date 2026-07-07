@@ -26,7 +26,15 @@ class User extends Authenticatable
         'password',
         'photo',
         'cover_photo',
+        'presentation_video',
+        'presentation_video_duration_seconds',
         'bio',
+        'coach_title',
+        'coach_short_description',
+        'coach_speciality',
+        'coach_experience_years',
+        'coach_certifications',
+        'coach_languages',
         'phone',
         'address',
         'account_status',
@@ -56,6 +64,7 @@ class User extends Authenticatable
     protected $appends = [
         'photo_url',
         'cover_photo_url',
+        'presentation_video_url',
     ];
 
     /**
@@ -68,6 +77,8 @@ class User extends Authenticatable
         'password' => 'hashed',
         'validated_at' => 'datetime',
         'stripe_onboarding_completed' => 'boolean',
+        'presentation_video_duration_seconds' => 'integer',
+        'coach_experience_years' => 'integer',
     ];
 
     /**
@@ -92,6 +103,18 @@ class User extends Authenticatable
         }
 
         return asset('storage/' . $this->cover_photo);
+    }
+
+    /**
+     * URL complète de la vidéo de présentation du coach.
+     */
+    public function getPresentationVideoUrlAttribute(): ?string
+    {
+        if (!$this->presentation_video) {
+            return null;
+        }
+
+        return asset('storage/' . $this->presentation_video);
     }
 
     public function roles(): BelongsToMany

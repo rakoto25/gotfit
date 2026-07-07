@@ -143,6 +143,12 @@ class AdminController extends Controller
             'phone' => ['nullable', 'string', 'max:50'],
             'address' => ['nullable', 'string', 'max:255'],
             'bio' => ['nullable', 'string'],
+            'coach_title' => ['nullable', 'string', 'max:255'],
+            'coach_short_description' => ['nullable', 'string', 'max:500'],
+            'coach_speciality' => ['nullable', 'string', 'max:255'],
+            'coach_experience_years' => ['nullable', 'integer', 'min:0', 'max:80'],
+            'coach_certifications' => ['nullable', 'string', 'max:2000'],
+            'coach_languages' => ['nullable', 'string', 'max:500'],
 
             'role_id' => ['nullable', 'integer', 'exists:roles,id'],
             'role' => ['nullable', 'string'],
@@ -168,6 +174,19 @@ class AdminController extends Controller
 
         if (Schema::hasColumn('users', 'bio')) {
             $userData['bio'] = $data['bio'] ?? null;
+        }
+
+        foreach ([
+            'coach_title',
+            'coach_short_description',
+            'coach_speciality',
+            'coach_experience_years',
+            'coach_certifications',
+            'coach_languages',
+        ] as $column) {
+            if (Schema::hasColumn('users', $column)) {
+                $userData[$column] = $data[$column] ?? null;
+            }
         }
 
         if (Schema::hasColumn('users', 'account_status')) {
@@ -225,6 +244,12 @@ class AdminController extends Controller
             'phone' => ['nullable', 'string', 'max:50'],
             'address' => ['nullable', 'string', 'max:255'],
             'bio' => ['nullable', 'string'],
+            'coach_title' => ['nullable', 'string', 'max:255'],
+            'coach_short_description' => ['nullable', 'string', 'max:500'],
+            'coach_speciality' => ['nullable', 'string', 'max:255'],
+            'coach_experience_years' => ['nullable', 'integer', 'min:0', 'max:80'],
+            'coach_certifications' => ['nullable', 'string', 'max:2000'],
+            'coach_languages' => ['nullable', 'string', 'max:500'],
 
             'role_id' => ['nullable', 'integer', 'exists:roles,id'],
             'role' => ['nullable', 'string'],
@@ -259,6 +284,19 @@ class AdminController extends Controller
 
         if (Schema::hasColumn('users', 'bio') && array_key_exists('bio', $data)) {
             $user->bio = $data['bio'];
+        }
+
+        foreach ([
+            'coach_title',
+            'coach_short_description',
+            'coach_speciality',
+            'coach_experience_years',
+            'coach_certifications',
+            'coach_languages',
+        ] as $column) {
+            if (Schema::hasColumn('users', $column) && array_key_exists($column, $data)) {
+                $user->{$column} = $data[$column];
+            }
         }
 
         if (Schema::hasColumn('users', 'account_status')) {
@@ -507,5 +545,4 @@ class AdminController extends Controller
         };
     }
 }
-
 
