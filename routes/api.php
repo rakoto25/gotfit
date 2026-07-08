@@ -25,7 +25,6 @@ use Illuminate\Support\Facades\Route;
 | DEBUG TEMPORAIRE AUTHORIZATION HEADER
 |--------------------------------------------------------------------------
 | Sécurisé : ces routes ne sont chargées que si APP_DEBUG=true.
-| Elles ne doivent pas être publiques en production.
 |--------------------------------------------------------------------------
 */
 
@@ -76,34 +75,49 @@ if (config('app.debug')) {
 |--------------------------------------------------------------------------
 */
 
-Route::post('/register', [InscriptionController::class, 'register']);
-Route::post('/login', [ConnexionController::class, 'login']);
-Route::post('/forgot-password', [ConnexionController::class, 'forgotPassword']);
-Route::post('/reset-password', [ConnexionController::class, 'resetPassword']);
+Route::post('/register', [InscriptionController::class, 'register'])
+    ->name('auth.register');
+
+Route::post('/login', [ConnexionController::class, 'login'])
+    ->name('auth.login');
+
+Route::post('/forgot-password', [ConnexionController::class, 'forgotPassword'])
+    ->name('auth.forgot-password');
+
+Route::post('/reset-password', [ConnexionController::class, 'resetPassword'])
+    ->name('auth.reset-password');
 
 /*
 |--------------------------------------------------------------------------
 | AUTHENTIFICATION GOOGLE AVEC CODE DE CONFIRMATION
 |--------------------------------------------------------------------------
 | Étape 1 :
-| L'application mobile envoie le id_token Google à /auth/google.
-| Le backend vérifie Google, génère un code, puis l'envoie à l'email Google.
+| POST /api/auth/google
+| L'application mobile envoie le id_token Google.
+| Laravel vérifie Google, crée un code puis l'envoie à l'adresse email Google.
 |
 | Étape 2 :
-| L'utilisateur saisit le code dans l'application.
-| L'application envoie verification_token + code à /auth/google/verify.
-| Le backend valide le code puis renvoie le token Sanctum Gotfit.
+| POST /api/auth/google/verify
+| L'utilisateur saisit le code reçu par email.
+| Laravel valide le code puis renvoie le token Sanctum Gotfit.
+|
+| Étape 3 :
+| POST /api/auth/google/resend
+| L'utilisateur peut demander un nouveau code.
 |--------------------------------------------------------------------------
 */
 
 Route::post('/auth/google', [SocialAuthController::class, 'googleRequestCode'])
-    ->middleware('throttle:5,1');
+    ->middleware('throttle:5,1')
+    ->name('auth.google.request-code');
 
 Route::post('/auth/google/verify', [SocialAuthController::class, 'googleVerifyCode'])
-    ->middleware('throttle:10,1');
+    ->middleware('throttle:10,1')
+    ->name('auth.google.verify-code');
 
 Route::post('/auth/google/resend', [SocialAuthController::class, 'googleResendCode'])
-    ->middleware('throttle:3,1');
+    ->middleware('throttle:3,1')
+    ->name('auth.google.resend-code');
 
 /*
 |--------------------------------------------------------------------------
@@ -251,19 +265,25 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/clients/{client}/history', [ClientJourneyController::class, 'history'])
         ->whereNumber('client');
+
     Route::get('/clients/{client}/notes', [ClientJourneyController::class, 'notes'])
         ->whereNumber('client');
+
     Route::post('/clients/{client}/notes', [ClientJourneyController::class, 'storeNote'])
         ->whereNumber('client');
+
     Route::put('/client-notes/{note}', [ClientJourneyController::class, 'updateNote'])
         ->whereNumber('note');
+
     Route::patch('/client-notes/{note}', [ClientJourneyController::class, 'updateNote'])
         ->whereNumber('note');
+
     Route::delete('/client-notes/{note}', [ClientJourneyController::class, 'deleteNote'])
         ->whereNumber('note');
 
     Route::get('/clients/{client}/onboarding', [ClientJourneyController::class, 'showOnboarding'])
         ->whereNumber('client');
+
     Route::get('/client/onboarding', [ClientJourneyController::class, 'myOnboarding']);
     Route::put('/client/onboarding', [ClientJourneyController::class, 'saveMyOnboarding']);
     Route::patch('/client/onboarding', [ClientJourneyController::class, 'saveMyOnboarding']);
@@ -295,6 +315,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/visio/sessions/{id}/end', [VisioSessionController::class, 'end'])->whereNumber('id');
     Route::post('/visio/sessions/{id}/cancel', [VisioSessionController::class, 'cancel'])->whereNumber('id');
     Route::get('/visio/sessions/{id}/participants', [VisioSessionController::class, 'participants'])->whereNumber('id');
+
     Route::post('/visio/sessions/{id}/participants/{participantId}/paid', [VisioSessionController::class, 'markParticipantPaid'])
         ->whereNumber('id')
         ->whereNumber('participantId');
@@ -342,7 +363,6 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
     Route::get('/admin/messages', [AdminMessageController::class, 'index']);
     Route::get('/messages', [AdminMessageController::class, 'index']);
 
-    // PRIORITÉ 6 – COMMUNICATION : messages administrateur vers tous les coachs/intervenants.
     Route::get('/admin/messages/coaches', [AdminMessageController::class, 'coaches']);
     Route::get('/messages/coaches', [AdminMessageController::class, 'coaches']);
 
