@@ -15,6 +15,7 @@ use App\Http\Controllers\PayementController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ReservationController;
 use App\Http\Controllers\ReviewController;
+use App\Http\Controllers\SocialAuthController;
 use App\Http\Controllers\VisioSessionController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -79,6 +80,30 @@ Route::post('/register', [InscriptionController::class, 'register']);
 Route::post('/login', [ConnexionController::class, 'login']);
 Route::post('/forgot-password', [ConnexionController::class, 'forgotPassword']);
 Route::post('/reset-password', [ConnexionController::class, 'resetPassword']);
+
+/*
+|--------------------------------------------------------------------------
+| AUTHENTIFICATION GOOGLE AVEC CODE DE CONFIRMATION
+|--------------------------------------------------------------------------
+| Étape 1 :
+| L'application mobile envoie le id_token Google à /auth/google.
+| Le backend vérifie Google, génère un code, puis l'envoie à l'email Google.
+|
+| Étape 2 :
+| L'utilisateur saisit le code dans l'application.
+| L'application envoie verification_token + code à /auth/google/verify.
+| Le backend valide le code puis renvoie le token Sanctum Gotfit.
+|--------------------------------------------------------------------------
+*/
+
+Route::post('/auth/google', [SocialAuthController::class, 'googleRequestCode'])
+    ->middleware('throttle:5,1');
+
+Route::post('/auth/google/verify', [SocialAuthController::class, 'googleVerifyCode'])
+    ->middleware('throttle:10,1');
+
+Route::post('/auth/google/resend', [SocialAuthController::class, 'googleResendCode'])
+    ->middleware('throttle:3,1');
 
 /*
 |--------------------------------------------------------------------------
