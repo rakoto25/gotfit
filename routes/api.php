@@ -23,48 +23,51 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 | DEBUG TEMPORAIRE AUTHORIZATION HEADER
 |--------------------------------------------------------------------------
-| À supprimer après correction du problème 401.
+| Sécurisé : ces routes ne sont chargées que si APP_DEBUG=true.
+| Elles ne doivent pas être publiques en production.
 |--------------------------------------------------------------------------
 */
 
-Route::get('/debug-auth-header', function (Request $request) {
-    return response()->json([
-        'authorization_header' => $request->header('Authorization'),
-        'bearer_token' => $request->bearerToken(),
-        'server_http_authorization' => $_SERVER['HTTP_AUTHORIZATION'] ?? null,
-        'server_authorization' => $_SERVER['Authorization'] ?? null,
-        'all_headers' => $request->headers->all(),
-    ]);
-});
+if (config('app.debug')) {
+    Route::get('/debug-auth-header', function (Request $request) {
+        return response()->json([
+            'authorization_header' => $request->header('Authorization'),
+            'bearer_token' => $request->bearerToken(),
+            'server_http_authorization' => $_SERVER['HTTP_AUTHORIZATION'] ?? null,
+            'server_authorization' => $_SERVER['Authorization'] ?? null,
+            'all_headers' => $request->headers->all(),
+        ]);
+    });
 
-Route::get('/debug-sanctum-user', function (Request $request) {
-    $plainToken = $request->bearerToken();
+    Route::get('/debug-sanctum-user', function (Request $request) {
+        $plainToken = $request->bearerToken();
 
-    $accessToken = $plainToken
-        ? \Laravel\Sanctum\PersonalAccessToken::findToken($plainToken)
-        : null;
+        $accessToken = $plainToken
+            ? \Laravel\Sanctum\PersonalAccessToken::findToken($plainToken)
+            : null;
 
-    $tokenable = $accessToken ? $accessToken->tokenable : null;
+        $tokenable = $accessToken ? $accessToken->tokenable : null;
 
-    return response()->json([
-        'bearer_token' => $plainToken,
-        'access_token_found' => $accessToken ? true : false,
-        'access_token_id' => $accessToken?->id,
-        'token_name' => $accessToken?->name,
-        'token_created_at' => $accessToken?->created_at,
-        'token_last_used_at' => $accessToken?->last_used_at,
-        'token_expires_at' => $accessToken?->expires_at,
-        'sanctum_config_expiration' => config('sanctum.expiration'),
-        'tokenable_type' => $accessToken?->tokenable_type,
-        'tokenable_id' => $accessToken?->tokenable_id,
-        'tokenable_found' => $tokenable ? true : false,
-        'tokenable_user' => $tokenable,
-        'auth_sanctum_check' => auth('sanctum')->check(),
-        'auth_sanctum_user' => auth('sanctum')->user(),
-        'auth_default_check' => auth()->check(),
-        'auth_default_user' => auth()->user(),
-    ]);
-});
+        return response()->json([
+            'bearer_token' => $plainToken,
+            'access_token_found' => $accessToken ? true : false,
+            'access_token_id' => $accessToken?->id,
+            'token_name' => $accessToken?->name,
+            'token_created_at' => $accessToken?->created_at,
+            'token_last_used_at' => $accessToken?->last_used_at,
+            'token_expires_at' => $accessToken?->expires_at,
+            'sanctum_config_expiration' => config('sanctum.expiration'),
+            'tokenable_type' => $accessToken?->tokenable_type,
+            'tokenable_id' => $accessToken?->tokenable_id,
+            'tokenable_found' => $tokenable ? true : false,
+            'tokenable_user' => $tokenable,
+            'auth_sanctum_check' => auth('sanctum')->check(),
+            'auth_sanctum_user' => auth('sanctum')->user(),
+            'auth_default_check' => auth()->check(),
+            'auth_default_user' => auth()->user(),
+        ]);
+    });
+}
 
 /*
 |--------------------------------------------------------------------------
@@ -313,6 +316,15 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
 
     Route::get('/admin/messages', [AdminMessageController::class, 'index']);
     Route::get('/messages', [AdminMessageController::class, 'index']);
+
+    // PRIORITÉ 6 – COMMUNICATION : messages administrateur vers tous les coachs/intervenants.
+    Route::get('/admin/messages/coaches', [AdminMessageController::class, 'coaches']);
+    Route::get('/messages/coaches', [AdminMessageController::class, 'coaches']);
+
+    Route::post('/admin/messages/broadcast-coaches', [AdminMessageController::class, 'broadcastToCoaches']);
+    Route::post('/messages/broadcast-coaches', [AdminMessageController::class, 'broadcastToCoaches']);
+    Route::post('/admin/messages/send-to-coaches', [AdminMessageController::class, 'broadcastToCoaches']);
+    Route::post('/messages/send-to-coaches', [AdminMessageController::class, 'broadcastToCoaches']);
 
     Route::post('/admin/messages', [AdminMessageController::class, 'store']);
     Route::post('/messages', [AdminMessageController::class, 'store']);

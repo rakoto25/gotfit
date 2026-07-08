@@ -20,11 +20,30 @@ class Message extends Model
     protected $fillable = [
         'conversation_id',
         'sender_id',
+        'receiver_id',
         'parent_id',
+        'subject',
         'message',
         'type',
         'media_url',
         'media_type',
+        'is_read',
+        'read_at',
+        'replied_at',
+        'status',
+        'is_admin_broadcast',
+        'broadcast_group',
+        'broadcast_target_role',
+    ];
+
+    /**
+     * Casts pour la communication admin et les statuts de lecture.
+     */
+    protected $casts = [
+        'is_read' => 'boolean',
+        'is_admin_broadcast' => 'boolean',
+        'read_at' => 'datetime',
+        'replied_at' => 'datetime',
     ];
 
     /**
@@ -52,6 +71,16 @@ class Message extends Model
     public function sender()
     {
         return $this->belongsTo(User::class, 'sender_id');
+    }
+
+    /**
+     * Utilisateur destinataire du message.
+     *
+     * Utilisé surtout pour les diffusions administrateur vers tous les coachs.
+     */
+    public function receiver()
+    {
+        return $this->belongsTo(User::class, 'receiver_id');
     }
 
     /**
