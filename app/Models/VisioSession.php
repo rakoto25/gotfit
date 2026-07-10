@@ -10,7 +10,10 @@ class VisioSession extends Model
     use HasFactory;
 
     protected $fillable = [
+        'reservation_id',
+        'annonce_id',
         'coach_id',
+        'session_type',
         'title',
         'description',
         'start_at',
@@ -44,6 +47,16 @@ class VisioSession extends Model
         'available_places',
         'is_confirmed_by_minimum',
     ];
+
+    public function reservation()
+    {
+        return $this->belongsTo(Reservation::class);
+    }
+
+    public function annonce()
+    {
+        return $this->belongsTo(Annonce::class);
+    }
 
     public function coach()
     {

@@ -5,6 +5,9 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Models\VisioParticipant;
 use App\Models\VisioSession;
+use App\Models\Reservation;
+use App\Services\ReservationVisioService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -22,7 +25,8 @@ class VisioSessionController extends Controller
                 },
             ])
             ->when(!$user || (!$user->hasRole('admin') && !$request->boolean('mine')), function ($query) {
-                $query->whereIn('status', ['open', 'confirmed', 'live']);
+                $query->whereNull('reservation_id')
+                    ->whereIn('status', ['open', 'confirmed', 'live']);
             })
             ->when($request->filled('status'), function ($query) use ($request) {
                 $query->where('status', $request->status);
@@ -94,8 +98,8 @@ class VisioSessionController extends Controller
             'description' => ['nullable', 'string', 'max:5000'],
             'start_at' => ['required', 'date'],
             'duration_minutes' => ['nullable', 'integer', 'min:15', 'max:360'],
-            'min_participants' => ['nullable', 'integer', 'min:2', 'max:100'],
-            'max_participants' => ['nullable', 'integer', 'min:2', 'max:100'],
+            'min_participants' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'max_participants' => ['nullable', 'integer', 'min:1', 'max:100'],
             'price' => ['nullable', 'numeric', 'min:0', 'max:999999'],
             'currency' => ['nullable', 'string', 'size:3'],
             'status' => ['nullable', Rule::in(['draft', 'open'])],
@@ -171,8 +175,8 @@ class VisioSessionController extends Controller
             'description' => ['nullable', 'string', 'max:5000'],
             'start_at' => ['nullable', 'date'],
             'duration_minutes' => ['nullable', 'integer', 'min:15', 'max:360'],
-            'min_participants' => ['nullable', 'integer', 'min:2', 'max:100'],
-            'max_participants' => ['nullable', 'integer', 'min:2', 'max:100'],
+            'min_participants' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'max_participants' => ['nullable', 'integer', 'min:1', 'max:100'],
             'price' => ['nullable', 'numeric', 'min:0', 'max:999999'],
             'currency' => ['nullable', 'string', 'size:3'],
             'status' => ['nullable', Rule::in(['draft', 'open'])],
@@ -216,6 +220,27 @@ class VisioSessionController extends Controller
 
         if (!$user->hasRole('client')) {
             return response()->json(['status' => 403, 'message' => 'Accès réservé aux clients'], 403);
+        }
+
+        if ($session->reservation_id) {
+            $reservation = Reservation::find($session->reservation_id);
+
+            if (!$reservation || (int) $reservation->client_id !== (int) $user->id) {
+                return response()->json(['status' => 403, 'message' => 'Cette visio est privée et liée à une autre réservation.'], 403);
+            }
+
+            if (!$reservation->is_paid && $reservation->payment_status !== 'paid') {
+                return response()->json(['status' => 402, 'message' => 'Le paiement de la réservation doit être confirmé.'], 402);
+            }
+
+            app(ReservationVisioService::class)->syncPaidReservation($reservation);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Participant synchronisé avec la réservation payée.',
+                'participant' => VisioParticipant::where('visio_session_id', $session->id)->where('user_id', $user->id)->first(),
+                'session' => $session->fresh(['coach:id,name,email,photo', 'participants.user:id,name,email,photo', 'reservation']),
+            ]);
         }
 
         if ((int) $session->coach_id === (int) $user->id) {
@@ -347,23 +372,51 @@ class VisioSessionController extends Controller
 
     public function join(Request $request, $id)
     {
-        $session = VisioSession::findOrFail($id);
+        $session = VisioSession::with(['reservation.annonce', 'participants'])->findOrFail($id);
         $user = $request->user();
+
+        if ($session->reservation) {
+            app(ReservationVisioService::class)->syncPaidReservation($session->reservation);
+            $session->refresh()->load(['reservation.annonce', 'participants']);
+        }
 
         $participant = VisioParticipant::where('visio_session_id', $session->id)
             ->where('user_id', $user->id)
             ->first();
 
         if (!$participant && !$this->canManageSession($user, $session)) {
-            return response()->json(['status' => 403, 'message' => 'Vous n’êtes pas inscrit à cette séance visio.'], 403);
+            return response()->json(['status' => 403, 'message' => 'Vous n’êtes pas autorisé à rejoindre cette séance visio.'], 403);
         }
 
         if ($participant && $participant->role === 'participant' && $participant->payment_status !== 'paid') {
             return response()->json(['status' => 402, 'message' => 'Le paiement doit être validé avant de rejoindre la visio.'], 402);
         }
 
-        if (in_array($session->status, ['draft', 'open', 'ended', 'cancelled'], true)) {
-            return response()->json(['status' => 422, 'message' => 'La séance visio n’est pas encore accessible.'], 422);
+        if (in_array($session->status, ['ended', 'cancelled'], true)) {
+            return response()->json(['status' => 422, 'message' => 'Cette séance visio n’est plus accessible.'], 422);
+        }
+
+        if ($session->status === 'draft') {
+            return response()->json(['status' => 422, 'message' => 'Cette séance visio est encore en préparation.'], 422);
+        }
+
+        $opensAt = $session->start_at->copy()->subMinutes(15);
+        $closesAt = $session->start_at->copy()->addMinutes($session->duration_minutes)->addMinutes(30);
+
+        if (now()->lt($opensAt)) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'La salle ouvrira 15 minutes avant la séance.',
+                'available_at' => $opensAt->toIso8601String(),
+            ], 422);
+        }
+
+        if (now()->gt($closesAt)) {
+            return response()->json(['status' => 422, 'message' => 'La période d’accès à cette séance est terminée.'], 422);
+        }
+
+        if ($session->status === 'open' && $session->paid_participants_count >= $session->min_participants) {
+            $session->update(['status' => 'confirmed']);
         }
 
         if ($participant) {
@@ -373,6 +426,8 @@ class VisioSessionController extends Controller
             ]);
         }
 
+        $token = $this->makeVideoToken($session, $user, $participant?->role ?? 'coach');
+
         return response()->json([
             'status' => 200,
             'message' => 'Accès visio autorisé',
@@ -380,8 +435,9 @@ class VisioSessionController extends Controller
             'server_url' => config('services.visio.server_url'),
             'room_name' => $session->room_name,
             'join_url' => $session->join_url,
-            'token' => $this->makeVideoToken($session, $user, $participant?->role ?? 'coach'),
-            'session' => $session->fresh(['coach:id,name,email,photo', 'participants.user:id,name,email,photo']),
+            'token' => $token,
+            'participant_token' => $token,
+            'session' => $session->fresh(['coach:id,name,email,photo', 'participants.user:id,name,email,photo', 'reservation']),
         ]);
     }
 
@@ -499,6 +555,17 @@ class VisioSessionController extends Controller
 
     private function canViewSession(?User $user, VisioSession $session): bool
     {
+        if ($session->reservation_id) {
+            if (!$user) {
+                return false;
+            }
+
+            return $this->canManageSession($user, $session)
+                || VisioParticipant::where('visio_session_id', $session->id)
+                    ->where('user_id', $user->id)
+                    ->exists();
+        }
+
         if (in_array($session->status, ['open', 'confirmed', 'live'], true)) {
             return true;
         }
@@ -544,7 +611,7 @@ private function makeVideoToken(VisioSession $session, User $user, string $role)
 
         $payload = [
             'iss' => $apiKey,
-            'sub' => (string) $user->id,
+            'sub' => 'gotfit-user-' . $user->id . '-session-' . $session->id,
             'name' => $user->name,
             'iat' => $now,
             'nbf' => $now - 10,
@@ -574,7 +641,7 @@ private function makeVideoToken(VisioSession $session, User $user, string $role)
 
     $payload = [
         'iss' => config('app.name', 'GotFit'),
-        'sub' => (string) $user->id,
+        'sub' => 'gotfit-user-' . $user->id . '-session-' . $session->id,
         'name' => $user->name,
         'role' => $role,
         'room' => $session->room_name,

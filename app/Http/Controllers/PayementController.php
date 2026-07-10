@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Payement;
 use App\Models\Reservation;
 use App\Notifications\ReservationStatusNotification;
+use App\Services\ReservationVisioService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -30,6 +31,28 @@ class PayementController extends Controller
             'totalCommission' => $payments->sum('commission'),
             'totalGotfit' => $payments->sum('commission') + $payments->sum('service_fee'),
             'totalIntervenant' => $payments->sum('intervenant_amount'),
+        ]);
+    }
+
+    public function myPayments(Request $request)
+    {
+        $user = $request->user();
+
+        $query = Payement::with(['client:id,name,email', 'intervenant:id,name,email', 'reservation.annonce', 'reservation.visioSession'])
+            ->latest();
+
+        if ($user->hasRole('intervenant')) {
+            $query->where('intervenant_id', $user->id);
+        } else {
+            $query->where('client_id', $user->id);
+        }
+
+        $payments = $query->get();
+
+        return response()->json([
+            'status' => 200,
+            'payments' => $payments,
+            'total' => $payments->whereIn('status', ['paid', 'transferred'])->sum('amount'),
         ]);
     }
 
@@ -183,8 +206,18 @@ class PayementController extends Controller
                 ]);
             });
 
-            $reservation->load(['client', 'intervenant', 'annonce', 'payement']);
-            $this->notifyReservationUsers($reservation, 'paid');
+            $reservation->load(['client', 'intervenant', 'annonce', 'payement', 'visioSession']);
+
+            try {
+                app(ReservationVisioService::class)->syncPaidReservation($reservation);
+            } catch (\Throwable $e) {
+                Log::error('Synchronisation visio après paiement impossible', [
+                    'reservation_id' => $reservation->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            $this->notifyReservationUsers($reservation->fresh(['client', 'intervenant', 'annonce', 'payement', 'visioSession']), 'paid');
         }
 
         if (($event->type ?? null) === 'payment_intent.payment_failed') {
@@ -600,7 +633,12 @@ class PayementController extends Controller
             ]);
         }
 
-        $reservation = $reservation->fresh(['client', 'intervenant', 'payement', 'annonce']);
+        $reservation = $reservation->fresh(['client', 'intervenant', 'payement', 'annonce', 'visioSession']);
+
+        if ($isFullRefund) {
+            app(ReservationVisioService::class)->cancelForReservation($reservation);
+        }
+
         $this->notifyReservationUsers($reservation, 'refunded');
 
         return response()->json([

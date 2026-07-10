@@ -14,6 +14,7 @@ class Reservation extends Model
         'annonce_id',
         'client_id',
         'intervenant_id',
+        'visio_session_id',
         'reservation_date',
         'reservation_time',
         'guests',
@@ -105,6 +106,11 @@ class Reservation extends Model
     public function intervenant()
     {
         return $this->belongsTo(User::class, 'intervenant_id');
+    }
+
+    public function visioSession()
+    {
+        return $this->belongsTo(VisioSession::class, 'visio_session_id');
     }
 
     public function payement()

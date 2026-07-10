@@ -152,7 +152,7 @@ Route::get('/missions', [MissionController::class, 'index']);
 */
 
 Route::get('/visio/sessions', [VisioSessionController::class, 'index']);
-Route::get('/visio/sessions/{id}', [VisioSessionController::class, 'show'])->whereNumber('id');
+Route::get('/visio/sessions/{id}', [VisioSessionController::class, 'show'])->middleware('auth:sanctum')->whereNumber('id');
 
 /*
 |--------------------------------------------------------------------------
@@ -200,6 +200,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/stripe/connect/onboarding', [PayementController::class, 'createConnectOnboarding']);
     Route::get('/stripe/connect/status', [PayementController::class, 'connectStatus']);
+    Route::get('/my-payments', [PayementController::class, 'myPayments']);
+    Route::get('/payments/me', [PayementController::class, 'myPayments']);
 
     /*
     |--------------------------------------------------------------------------

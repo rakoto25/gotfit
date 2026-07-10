@@ -12,7 +12,7 @@ class ReservationController extends Controller
 {
     public function getAllReservation()
     {
-        $reservations = Reservation::with(['client', 'intervenant', 'annonce', 'payement'])
+        $reservations = Reservation::with(['client', 'intervenant', 'annonce', 'payement', 'visioSession'])
             ->latest()
             ->get();
 
@@ -21,7 +21,7 @@ class ReservationController extends Controller
 
     public function getReservationByIntervenant()
     {
-        $reservations = Reservation::with(['client.clientOnboarding', 'intervenant', 'annonce', 'payement'])
+        $reservations = Reservation::with(['client.clientOnboarding', 'intervenant', 'annonce', 'payement', 'visioSession'])
             ->withCount(['notes' => function ($query) {
                 $query->where(function ($q) {
                     $q->where('visibility', 'shared')
@@ -37,7 +37,7 @@ class ReservationController extends Controller
 
     public function getReservationByClient()
     {
-        $reservations = Reservation::with(['client', 'intervenant', 'annonce', 'payement', 'review'])
+        $reservations = Reservation::with(['client', 'intervenant', 'annonce', 'payement', 'review', 'visioSession'])
             ->withCount(['notes' => function ($query) {
                 $query->where(function ($q) {
                     $q->where('visibility', 'shared')
@@ -53,7 +53,7 @@ class ReservationController extends Controller
 
     public function show($id)
     {
-        $reservation = Reservation::with(['client.clientOnboarding', 'intervenant', 'annonce', 'payement', 'review'])->findOrFail($id);
+        $reservation = Reservation::with(['client.clientOnboarding', 'intervenant', 'annonce', 'payement', 'review', 'visioSession'])->findOrFail($id);
         $user = Auth::user();
 
         if (!$user->hasRole('admin') && (int) $reservation->client_id !== (int) $user->id && (int) $reservation->intervenant_id !== (int) $user->id) {
@@ -89,7 +89,7 @@ class ReservationController extends Controller
     {
         $user = $request->user();
 
-        $query = Reservation::with(['client:id,name,email', 'intervenant:id,name,email', 'annonce', 'payement'])
+        $query = Reservation::with(['client:id,name,email', 'intervenant:id,name,email', 'annonce', 'payement', 'visioSession'])
             ->when($request->filled('from'), fn ($q) => $q->whereDate('reservation_date', '>=', $request->from))
             ->when($request->filled('to'), fn ($q) => $q->whereDate('reservation_date', '<=', $request->to))
             ->whereNotIn('status', ['refuse', 'annule'])
@@ -140,7 +140,7 @@ class ReservationController extends Controller
 
     public function terminerReservation($id)
     {
-        $reservation = Reservation::with(['client', 'intervenant', 'annonce', 'payement'])->findOrFail($id);
+        $reservation = Reservation::with(['client', 'intervenant', 'annonce', 'payement', 'visioSession'])->findOrFail($id);
 
         if (!$reservation->is_paid) {
             return response()->json([
@@ -168,7 +168,7 @@ class ReservationController extends Controller
             'validation_deadline' => now()->addHours($validationDelay),
         ]);
 
-        $reservation->load(['client', 'intervenant', 'annonce', 'payement']);
+        $reservation->load(['client', 'intervenant', 'annonce', 'payement', 'visioSession']);
         $this->notifyReservationUsers($reservation, 'pending_validation');
 
         return response()->json([
@@ -182,7 +182,7 @@ class ReservationController extends Controller
     {
         $request->validate(['status' => 'required|in:attente,confirme,refuse,realise']);
 
-        $reservations = Reservation::with(['client', 'intervenant', 'annonce', 'payement'])
+        $reservations = Reservation::with(['client', 'intervenant', 'annonce', 'payement', 'visioSession'])
             ->where('intervenant_id', Auth::id())
             ->where('status', $request->status)
             ->latest()
@@ -200,7 +200,7 @@ class ReservationController extends Controller
         }
 
         $reservation->update(['status' => $status]);
-        $reservation->load(['client', 'intervenant', 'annonce', 'payement']);
+        $reservation->load(['client', 'intervenant', 'annonce', 'payement', 'visioSession']);
 
         $event = match ($status) {
             'confirme' => 'confirmed',
@@ -226,6 +226,8 @@ class ReservationController extends Controller
             'client' => $reservation->client,
             'intervenant' => $reservation->intervenant,
             'annonce' => $reservation->annonce,
+            'visio_session_id' => $reservation->visio_session_id,
+            'visio_session' => $reservation->visioSession,
             'calendar_url' => url('/api/reservation/' . $reservation->id . '/calendar.ics'),
         ];
     }

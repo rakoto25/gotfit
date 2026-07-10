@@ -11,6 +11,7 @@ class VisioParticipant extends Model
 
     protected $fillable = [
         'visio_session_id',
+        'reservation_id',
         'user_id',
         'role',
         'status',
@@ -35,6 +36,11 @@ class VisioParticipant extends Model
     public function session()
     {
         return $this->belongsTo(VisioSession::class, 'visio_session_id');
+    }
+
+    public function reservation()
+    {
+        return $this->belongsTo(Reservation::class);
     }
 
     public function user()
