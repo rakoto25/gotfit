@@ -24,6 +24,9 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'google_id',
+        'auth_provider',
+        'google_avatar_url',
         'photo',
         'cover_photo',
         'presentation_video',
@@ -44,6 +47,8 @@ class User extends Authenticatable
         'fcm_token',
         'stripe_account_id',
         'stripe_onboarding_completed',
+        'email_verified_at',
+        'last_login_at',
     ];
 
     /**
@@ -54,6 +59,7 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+        'google_id',
     ];
 
     /**
@@ -74,6 +80,7 @@ class User extends Authenticatable
      */
     protected $casts = [
         'email_verified_at' => 'datetime',
+        'last_login_at' => 'datetime',
         'password' => 'hashed',
         'validated_at' => 'datetime',
         'stripe_onboarding_completed' => 'boolean',
@@ -86,11 +93,11 @@ class User extends Authenticatable
      */
     public function getPhotoUrlAttribute(): ?string
     {
-        if (!$this->photo) {
-            return null;
+        if (! $this->photo) {
+            return $this->google_avatar_url;
         }
 
-        return asset('storage/' . $this->photo);
+        return asset('storage/'.$this->photo);
     }
 
     /**
@@ -98,11 +105,11 @@ class User extends Authenticatable
      */
     public function getCoverPhotoUrlAttribute(): ?string
     {
-        if (!$this->cover_photo) {
+        if (! $this->cover_photo) {
             return null;
         }
 
-        return asset('storage/' . $this->cover_photo);
+        return asset('storage/'.$this->cover_photo);
     }
 
     /**
@@ -110,11 +117,11 @@ class User extends Authenticatable
      */
     public function getPresentationVideoUrlAttribute(): ?string
     {
-        if (!$this->presentation_video) {
+        if (! $this->presentation_video) {
             return null;
         }
 
-        return asset('storage/' . $this->presentation_video);
+        return asset('storage/'.$this->presentation_video);
     }
 
     public function roles(): BelongsToMany

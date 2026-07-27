@@ -19,6 +19,7 @@ use App\Http\Controllers\SocialAuthController;
 use App\Http\Controllers\VisioSessionController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use Laravel\Sanctum\PersonalAccessToken;
 
 /*
 |--------------------------------------------------------------------------
@@ -43,7 +44,7 @@ if (config('app.debug')) {
         $plainToken = $request->bearerToken();
 
         $accessToken = $plainToken
-            ? \Laravel\Sanctum\PersonalAccessToken::findToken($plainToken)
+            ? PersonalAccessToken::findToken($plainToken)
             : null;
 
         $tokenable = $accessToken ? $accessToken->tokenable : null;
@@ -89,35 +90,16 @@ Route::post('/reset-password', [ConnexionController::class, 'resetPassword'])
 
 /*
 |--------------------------------------------------------------------------
-| AUTHENTIFICATION GOOGLE AVEC CODE DE CONFIRMATION
+| AUTHENTIFICATION GOOGLE
 |--------------------------------------------------------------------------
-| Étape 1 :
-| POST /api/auth/google
-| L'application mobile envoie le id_token Google.
-| Laravel vérifie Google, crée un code puis l'envoie à l'adresse email Google.
-|
-| Étape 2 :
-| POST /api/auth/google/verify
-| L'utilisateur saisit le code reçu par email.
-| Laravel valide le code puis renvoie le token Sanctum Gotfit.
-|
-| Étape 3 :
-| POST /api/auth/google/resend
-| L'utilisateur peut demander un nouveau code.
+| Le navigateur transmet le jeton Google Identity Services. Laravel vérifie
+| l'identité, crée le compte au premier passage et renvoie un token Sanctum.
 |--------------------------------------------------------------------------
 */
 
-Route::post('/auth/google', [SocialAuthController::class, 'googleRequestCode'])
+Route::post('/auth/google', [SocialAuthController::class, 'google'])
     ->middleware('throttle:5,1')
-    ->name('auth.google.request-code');
-
-Route::post('/auth/google/verify', [SocialAuthController::class, 'googleVerifyCode'])
-    ->middleware('throttle:10,1')
-    ->name('auth.google.verify-code');
-
-Route::post('/auth/google/resend', [SocialAuthController::class, 'googleResendCode'])
-    ->middleware('throttle:3,1')
-    ->name('auth.google.resend-code');
+    ->name('auth.google');
 
 /*
 |--------------------------------------------------------------------------

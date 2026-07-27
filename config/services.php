@@ -32,6 +32,10 @@ return [
         'validation_delay_hours' => env('STRIPE_VALIDATION_DELAY_HOURS', 72),
     ],
 
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+    ],
+
     'visio' => [
         'provider' => env('VISIO_PROVIDER', 'livekit'),
         'server_url' => env('VISIO_SERVER_URL'),
