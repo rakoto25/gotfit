@@ -54,6 +54,19 @@ l'adresse email, puis :
 Les comptes coach créés via Google restent en attente de validation
 administrateur.
 
+## Webapp Next.js
+
+La webapp complète se trouve dans [`webapp/`](webapp). Elle contient la nouvelle
+interface responsive, les annonces des coachs, la page Contact dans le header
+et l'inscription au choix par formulaire ou avec Google.
+
+```bash
+cd webapp
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
 ## Tests
 
 ```bash
