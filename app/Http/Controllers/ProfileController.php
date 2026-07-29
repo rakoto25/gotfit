@@ -38,33 +38,36 @@ class ProfileController extends Controller
             'all_files' => array_keys($request->allFiles()),
         ]);
 
-        $request->validate([
-            'name' => ['required', 'string', 'max:255'],
+        $validated = $request->validate([
+            'name' => ['sometimes', 'required', 'string', 'max:255'],
 
             'email' => [
+                'sometimes',
                 'required',
                 'email',
                 'max:255',
                 Rule::unique('users', 'email')->ignore($user->id),
             ],
 
-            'password' => ['nullable', 'string', 'min:6'],
+            'password' => ['sometimes', 'nullable', 'string', 'min:6'],
 
-            'bio' => ['nullable', 'string', 'max:1000'],
-            'coach_title' => ['nullable', 'string', 'max:255'],
-            'coach_short_description' => ['nullable', 'string', 'max:500'],
-            'coach_speciality' => ['nullable', 'string', 'max:255'],
-            'coach_experience_years' => ['nullable', 'integer', 'min:0', 'max:80'],
-            'coach_certifications' => ['nullable', 'string', 'max:2000'],
-            'coach_languages' => ['nullable', 'string', 'max:500'],
-            'phone' => ['nullable', 'string', 'max:50'],
-            'address' => ['nullable', 'string', 'max:255'],
+            'bio' => ['sometimes', 'nullable', 'string', 'max:1000'],
+            'coach_title' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'coach_short_description' => ['sometimes', 'nullable', 'string', 'max:500'],
+            'coach_speciality' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'coach_experience_years' => ['sometimes', 'nullable', 'integer', 'min:0', 'max:80'],
+            'coach_certifications' => ['sometimes', 'nullable', 'string', 'max:2000'],
+            'coach_languages' => ['sometimes', 'nullable', 'string', 'max:500'],
+            'phone' => ['sometimes', 'nullable', 'string', 'max:50'],
+            'address' => ['sometimes', 'nullable', 'string', 'max:255'],
 
-            'photo' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
-            'cover_photo' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:4096'],
-            'presentation_video' => ['nullable', 'file', 'mimetypes:video/mp4,video/quicktime,video/webm,video/x-matroska', 'mimes:mp4,mov,webm,mkv', 'max:51200'],
-            'remove_presentation_video' => ['nullable', 'boolean'],
-            'fcm_token' => ['nullable', 'string'],
+            'photo' => ['sometimes', 'nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp,image/heic,image/heif', 'mimes:jpg,jpeg,png,webp,heic,heif', 'max:8192'],
+            'cover_photo' => ['sometimes', 'nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp,image/heic,image/heif', 'mimes:jpg,jpeg,png,webp,heic,heif', 'max:12288'],
+            'presentation_video' => ['sometimes', 'nullable', 'file', 'mimetypes:video/mp4,video/quicktime,video/webm,video/x-matroska', 'mimes:mp4,mov,webm,mkv', 'max:51200'],
+            'remove_photo' => ['sometimes', 'nullable', 'boolean'],
+            'remove_cover_photo' => ['sometimes', 'nullable', 'boolean'],
+            'remove_presentation_video' => ['sometimes', 'nullable', 'boolean'],
+            'fcm_token' => ['sometimes', 'nullable', 'string'],
         ]);
 
         $presentationVideoDuration = null;
@@ -90,16 +93,17 @@ class ProfileController extends Controller
             }
         }
 
-        $data = [
-            'name' => $request->name,
-            'email' => $request->email,
-            'bio' => $request->bio,
-            'phone' => $request->phone,
-            'address' => $request->address,
-        ];
+        $data = [];
+        $filesToDelete = [];
 
-        if (Schema::hasColumn('users', 'fcm_token')) {
-            $data['fcm_token'] = $request->fcm_token;
+        foreach (['name', 'email', 'bio', 'phone', 'address'] as $column) {
+            if ($request->exists($column)) {
+                $data[$column] = $validated[$column] ?? null;
+            }
+        }
+
+        if (Schema::hasColumn('users', 'fcm_token') && $request->exists('fcm_token')) {
+            $data['fcm_token'] = $validated['fcm_token'] ?? null;
         }
 
         foreach ([
@@ -110,8 +114,8 @@ class ProfileController extends Controller
             'coach_certifications',
             'coach_languages',
         ] as $column) {
-            if (Schema::hasColumn('users', $column)) {
-                $data[$column] = $request->{$column};
+            if (Schema::hasColumn('users', $column) && $request->exists($column)) {
+                $data[$column] = $validated[$column] ?? null;
             }
         }
 
@@ -119,36 +123,47 @@ class ProfileController extends Controller
             $data['password'] = Hash::make($request->password);
         }
 
-        if ($request->hasFile('photo')) {
-            if (
-                Schema::hasColumn('users', 'photo') &&
-                $user->photo &&
-                Storage::disk('public')->exists($user->photo)
-            ) {
-                Storage::disk('public')->delete($user->photo);
+        if ($request->boolean('remove_photo') && Schema::hasColumn('users', 'photo')) {
+            if ($user->photo) {
+                $filesToDelete[] = $user->photo;
             }
 
-            if (Schema::hasColumn('users', 'photo')) {
-                $data['photo'] = $request->file('photo')->store('profiles', 'public');
-            }
+            $data['photo'] = null;
         }
 
-        if ($request->hasFile('cover_photo')) {
-            if (
-                Schema::hasColumn('users', 'cover_photo') &&
-                $user->cover_photo &&
-                Storage::disk('public')->exists($user->cover_photo)
-            ) {
-                Storage::disk('public')->delete($user->cover_photo);
+        if ($request->hasFile('photo') && Schema::hasColumn('users', 'photo')) {
+            $newPhoto = $request->file('photo')->store('profiles', 'public');
+
+            if ($user->photo && $user->photo !== $newPhoto) {
+                $filesToDelete[] = $user->photo;
             }
 
-            if (Schema::hasColumn('users', 'cover_photo')) {
-                $data['cover_photo'] = $request->file('cover_photo')->store('covers', 'public');
+            $data['photo'] = $newPhoto;
+        }
+
+        if ($request->boolean('remove_cover_photo') && Schema::hasColumn('users', 'cover_photo')) {
+            if ($user->cover_photo) {
+                $filesToDelete[] = $user->cover_photo;
             }
+
+            $data['cover_photo'] = null;
+        }
+
+        if ($request->hasFile('cover_photo') && Schema::hasColumn('users', 'cover_photo')) {
+            $newCoverPhoto = $request->file('cover_photo')->store('covers', 'public');
+
+            if ($user->cover_photo && $user->cover_photo !== $newCoverPhoto) {
+                $filesToDelete[] = $user->cover_photo;
+            }
+
+            $data['cover_photo'] = $newCoverPhoto;
         }
 
         if ($request->boolean('remove_presentation_video') && Schema::hasColumn('users', 'presentation_video')) {
-            $this->deleteStoredUserFile($user, 'presentation_video');
+            if ($user->presentation_video) {
+                $filesToDelete[] = $user->presentation_video;
+            }
+
             $data['presentation_video'] = null;
 
             if (Schema::hasColumn('users', 'presentation_video_duration_seconds')) {
@@ -157,9 +172,13 @@ class ProfileController extends Controller
         }
 
         if ($request->hasFile('presentation_video') && Schema::hasColumn('users', 'presentation_video')) {
-            $this->deleteStoredUserFile($user, 'presentation_video');
+            $newPresentationVideo = $request->file('presentation_video')->store('coach-videos', 'public');
 
-            $data['presentation_video'] = $request->file('presentation_video')->store('coach-videos', 'public');
+            if ($user->presentation_video && $user->presentation_video !== $newPresentationVideo) {
+                $filesToDelete[] = $user->presentation_video;
+            }
+
+            $data['presentation_video'] = $newPresentationVideo;
 
             if (Schema::hasColumn('users', 'presentation_video_duration_seconds')) {
                 $data['presentation_video_duration_seconds'] = (int) ceil($presentationVideoDuration);
@@ -167,12 +186,18 @@ class ProfileController extends Controller
         }
 
         $user->update($data);
+
+        foreach (array_unique(array_filter($filesToDelete)) as $fileToDelete) {
+            if (Storage::disk('public')->exists($fileToDelete)) {
+                Storage::disk('public')->delete($fileToDelete);
+            }
+        }
+
         $user->refresh();
         $user->load('roles');
 
         return response()->json([
             'status' => 200,
-            'debug_cover_enabled' => true,
             'message' => 'Profil mis à jour avec succès',
             'user' => $this->formatUserProfile($user),
         ]);
@@ -327,7 +352,7 @@ class ProfileController extends Controller
 
     private function getUserValue(User $user, string $column, $default = null)
     {
-        if (!Schema::hasColumn('users', $column)) {
+        if (! Schema::hasColumn('users', $column)) {
             return $default;
         }
 
@@ -337,11 +362,11 @@ class ProfileController extends Controller
     private function getFirstAvailableUserValue(User $user, array $columns, $default = null)
     {
         foreach ($columns as $column) {
-            if (!Schema::hasColumn('users', $column)) {
+            if (! Schema::hasColumn('users', $column)) {
                 continue;
             }
 
-            if (!empty($user->{$column})) {
+            if (! empty($user->{$column})) {
                 return $user->{$column};
             }
         }
@@ -351,12 +376,12 @@ class ProfileController extends Controller
 
     private function getPhotoUrl(User $user)
     {
-        if (Schema::hasColumn('users', 'photo_url') && !empty($user->photo_url)) {
+        if (Schema::hasColumn('users', 'photo_url') && ! empty($user->photo_url)) {
             return $user->photo_url;
         }
 
-        if (Schema::hasColumn('users', 'photo') && !empty($user->photo)) {
-            return asset('storage/' . $user->photo);
+        if (Schema::hasColumn('users', 'photo') && ! empty($user->photo)) {
+            return asset('storage/'.$user->photo);
         }
 
         return null;
@@ -364,12 +389,12 @@ class ProfileController extends Controller
 
     private function getCoverPhotoUrl(User $user)
     {
-        if (Schema::hasColumn('users', 'cover_photo_url') && !empty($user->cover_photo_url)) {
+        if (Schema::hasColumn('users', 'cover_photo_url') && ! empty($user->cover_photo_url)) {
             return $user->cover_photo_url;
         }
 
-        if (Schema::hasColumn('users', 'cover_photo') && !empty($user->cover_photo)) {
-            return asset('storage/' . $user->cover_photo);
+        if (Schema::hasColumn('users', 'cover_photo') && ! empty($user->cover_photo)) {
+            return asset('storage/'.$user->cover_photo);
         }
 
         return null;
@@ -377,12 +402,12 @@ class ProfileController extends Controller
 
     private function getPresentationVideoUrl(User $user)
     {
-        if (Schema::hasColumn('users', 'presentation_video_url') && !empty($user->presentation_video_url)) {
+        if (Schema::hasColumn('users', 'presentation_video_url') && ! empty($user->presentation_video_url)) {
             return $user->presentation_video_url;
         }
 
-        if (Schema::hasColumn('users', 'presentation_video') && !empty($user->presentation_video)) {
-            return asset('storage/' . $user->presentation_video);
+        if (Schema::hasColumn('users', 'presentation_video') && ! empty($user->presentation_video)) {
+            return asset('storage/'.$user->presentation_video);
         }
 
         return null;
@@ -392,7 +417,7 @@ class ProfileController extends Controller
     {
         if (
             Schema::hasColumn('users', $column) &&
-            !empty($user->{$column}) &&
+            ! empty($user->{$column}) &&
             Storage::disk('public')->exists($user->{$column})
         ) {
             Storage::disk('public')->delete($user->{$column});
@@ -401,7 +426,7 @@ class ProfileController extends Controller
 
     private function getVideoDurationInSeconds(string $path): ?float
     {
-        if (!function_exists('shell_exec')) {
+        if (! function_exists('shell_exec')) {
             return null;
         }
 
@@ -412,13 +437,13 @@ class ProfileController extends Controller
         }
 
         $command = escapeshellcmd($ffprobe)
-            . ' -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 '
-            . escapeshellarg($path)
-            . ' 2>/dev/null';
+            .' -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 '
+            .escapeshellarg($path)
+            .' 2>/dev/null';
 
         $output = trim((string) shell_exec($command));
 
-        if ($output === '' || !is_numeric($output)) {
+        if ($output === '' || ! is_numeric($output)) {
             return null;
         }
 

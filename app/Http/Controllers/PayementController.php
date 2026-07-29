@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\SendExpoPushNotification;
 use App\Models\Payement;
 use App\Models\Reservation;
 use App\Notifications\ReservationStatusNotification;
@@ -74,6 +75,13 @@ class PayementController extends Controller
             return response()->json(['status' => 400, 'message' => 'Cette réservation est déjà payée'], 400);
         }
 
+        if (in_array($reservation->status, ['refuse', 'annule', 'realise'], true)) {
+            return response()->json([
+                'status' => 409,
+                'message' => 'Cette réservation ne peut plus être payée.',
+            ], 409);
+        }
+
         if (in_array($reservation->prestation_status, ['disputed', 'cancelled', 'refunded'], true)) {
             return response()->json(['status' => 400, 'message' => 'Cette réservation ne peut plus être payée'], 400);
         }
@@ -91,7 +99,7 @@ class PayementController extends Controller
                 'status' => 200,
                 'clientSecret' => $existingIntent->client_secret,
                 'payment_intent_id' => $existingIntent->id,
-                'amount' => $reservation->total_client_amount,
+                'amount' => $amountInCents,
                 'currency' => $reservation->currency ?: 'eur',
                 'reservation' => $reservation,
             ]);
@@ -101,7 +109,7 @@ class PayementController extends Controller
             'amount' => $amountInCents,
             'currency' => $reservation->currency ?: 'eur',
             'automatic_payment_methods' => ['enabled' => true],
-            'transfer_group' => 'reservation_' . $reservation->id,
+            'transfer_group' => 'reservation_'.$reservation->id,
             'metadata' => [
                 'reservation_id' => $reservation->id,
                 'client_id' => $reservation->client_id,
@@ -122,7 +130,7 @@ class PayementController extends Controller
             'status' => 200,
             'clientSecret' => $paymentIntent->client_secret,
             'payment_intent_id' => $paymentIntent->id,
-            'amount' => $reservation->total_client_amount,
+            'amount' => $amountInCents,
             'currency' => $reservation->currency ?: 'eur',
             'reservation' => $reservation,
         ]);
@@ -146,8 +154,9 @@ class PayementController extends Controller
         $sigHeader = $request->header('Stripe-Signature');
         $secret = config('services.stripe.webhook_secret');
 
-        if (!$secret || !$sigHeader) {
+        if (! $secret || ! $sigHeader) {
             Log::warning('Stripe webhook refusé: signature ou secret manquant');
+
             return response()->json(['error' => 'Signature Stripe manquante'], 400);
         }
 
@@ -155,6 +164,7 @@ class PayementController extends Controller
             $event = Webhook::constructEvent($payload, $sigHeader, $secret);
         } catch (\Throwable $e) {
             Log::warning('Stripe webhook invalide', ['error' => $e->getMessage()]);
+
             return response()->json(['error' => 'Webhook invalide'], 400);
         }
 
@@ -162,17 +172,50 @@ class PayementController extends Controller
             $intent = $event->data->object;
             $reservationId = $intent->metadata->reservation_id ?? null;
 
-            if (!$reservationId) {
+            if (! $reservationId) {
                 return response()->json(['error' => 'Réservation absente'], 400);
             }
 
             $reservation = Reservation::find($reservationId);
 
-            if (!$reservation) {
+            if (! $reservation) {
                 return response()->json(['error' => 'Réservation introuvable'], 404);
             }
 
-            DB::transaction(function () use ($intent, $reservation) {
+            $expectedAmount = (int) round(((float) $reservation->total_client_amount) * 100);
+            $receivedAmount = (int) ($intent->amount_received ?? $intent->amount ?? 0);
+            $expectedCurrency = strtolower($reservation->currency ?: 'eur');
+            $receivedCurrency = strtolower((string) ($intent->currency ?? ''));
+
+            if (
+                $receivedAmount !== $expectedAmount
+                || $receivedCurrency !== $expectedCurrency
+            ) {
+                Log::critical('Paiement Stripe incohérent refusé', [
+                    'reservation_id' => $reservation->id,
+                    'payment_intent_id' => $intent->id ?? null,
+                    'expected_amount' => $expectedAmount,
+                    'received_amount' => $receivedAmount,
+                    'expected_currency' => $expectedCurrency,
+                    'received_currency' => $receivedCurrency,
+                ]);
+
+                return response()->json([
+                    'error' => 'Le montant ou la devise du paiement ne correspond pas à la réservation.',
+                ], 400);
+            }
+
+            $paymentTransitioned = false;
+
+            DB::transaction(function () use (
+                $intent,
+                $reservation,
+                &$paymentTransitioned
+            ) {
+                $reservation = Reservation::lockForUpdate()
+                    ->findOrFail($reservation->id);
+                $paymentTransitioned = ! $reservation->is_paid
+                    || $reservation->payment_status !== 'paid';
                 $amount = ($intent->amount_received ?? $intent->amount) / 100;
                 $chargeId = is_string($intent->latest_charge ?? null) ? $intent->latest_charge : null;
                 Payement::updateOrCreate(
@@ -206,18 +249,31 @@ class PayementController extends Controller
                 ]);
             });
 
-            $reservation->load(['client', 'intervenant', 'annonce', 'payement', 'visioSession']);
+            $reservation = $reservation->fresh([
+                'client',
+                'intervenant',
+                'annonce',
+                'payement',
+                'visioSession',
+            ]);
 
-            try {
-                app(ReservationVisioService::class)->syncPaidReservation($reservation);
-            } catch (\Throwable $e) {
-                Log::error('Synchronisation visio après paiement impossible', [
-                    'reservation_id' => $reservation->id,
-                    'error' => $e->getMessage(),
-                ]);
+            if ($paymentTransitioned) {
+                try {
+                    app(ReservationVisioService::class)->syncPaidReservation($reservation);
+                } catch (\Throwable $e) {
+                    Log::error('Synchronisation visio après paiement impossible', [
+                        'reservation_id' => $reservation->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+
+                $this->notifyReservationUser($reservation, $reservation->client, 'paid');
+                $this->notifyReservationUser(
+                    $reservation,
+                    $reservation->intervenant,
+                    'paid_awaiting_confirmation'
+                );
             }
-
-            $this->notifyReservationUsers($reservation->fresh(['client', 'intervenant', 'annonce', 'payement', 'visioSession']), 'paid');
         }
 
         if (($event->type ?? null) === 'payment_intent.payment_failed') {
@@ -264,24 +320,24 @@ class PayementController extends Controller
 
         $user = $request->user();
 
-        if (!$user->isIntervenant()) {
+        if (! $user->isIntervenant()) {
             return response()->json(['status' => 403, 'message' => 'Réservé aux intervenants'], 403);
         }
 
-        if (!$user->stripe_account_id) {
-                $account = Account::create([
-                    'type' => 'express',
-                    'email' => $user->email,
-                    'country' => env('STRIPE_CONNECT_COUNTRY', 'FR'),
-                    'capabilities' => [
-                        'card_payments' => ['requested' => true],
-                        'transfers' => ['requested' => true],
-                    ],
-                    'metadata' => [
-                        'user_id' => $user->id,
-                        'platform' => 'gotfit',
-                    ],
-                ]);
+        if (! $user->stripe_account_id) {
+            $account = Account::create([
+                'type' => 'express',
+                'email' => $user->email,
+                'country' => env('STRIPE_CONNECT_COUNTRY', 'FR'),
+                'capabilities' => [
+                    'card_payments' => ['requested' => true],
+                    'transfers' => ['requested' => true],
+                ],
+                'metadata' => [
+                    'user_id' => $user->id,
+                    'platform' => 'gotfit',
+                ],
+            ]);
 
             $user->update([
                 'stripe_account_id' => $account->id,
@@ -289,14 +345,14 @@ class PayementController extends Controller
             ]);
         }
 
-            $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech/webapp'), '/');
+        $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech/webapp'), '/');
 
-            $accountLink = AccountLink::create([
-                'account' => $user->stripe_account_id,
-                'refresh_url' => $frontendUrl . '/profile?stripe=refresh',
-                'return_url' => $frontendUrl . '/profile?stripe=success',
-                'type' => 'account_onboarding',
-            ]);
+        $accountLink = AccountLink::create([
+            'account' => $user->stripe_account_id,
+            'refresh_url' => $frontendUrl.'/profile?stripe=refresh',
+            'return_url' => $frontendUrl.'/profile?stripe=success',
+            'type' => 'account_onboarding',
+        ]);
 
         return response()->json([
             'status' => 200,
@@ -311,7 +367,7 @@ class PayementController extends Controller
 
         $user = $request->user();
 
-        if (!$user->stripe_account_id) {
+        if (! $user->stripe_account_id) {
             return response()->json([
                 'status' => 200,
                 'connected' => false,
@@ -340,14 +396,14 @@ class PayementController extends Controller
     {
         $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech/webapp'), '/');
 
-        return redirect()->away($frontendUrl . '/profile?stripe=success');
+        return redirect()->away($frontendUrl.'/profile?stripe=success');
     }
 
     public function connectRefresh()
     {
         $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech/webapp'), '/');
 
-        return redirect()->away($frontendUrl . '/profile?stripe=refresh');
+        return redirect()->away($frontendUrl.'/profile?stripe=refresh');
     }
 
     public function validatePrestation(Request $request, $id)
@@ -416,7 +472,7 @@ class PayementController extends Controller
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
-        if (!$reservation->is_paid || $reservation->payment_status !== 'paid') {
+        if (! $reservation->is_paid || $reservation->payment_status !== 'paid') {
             return response()->json(['status' => 400, 'message' => 'La réservation doit être payée avant litige'], 400);
         }
 
@@ -451,7 +507,7 @@ class PayementController extends Controller
 
         $reservation = Reservation::with(['intervenant', 'payement'])->findOrFail($id);
 
-        if (!$reservation->is_paid || $reservation->payment_status !== 'paid') {
+        if (! $reservation->is_paid || $reservation->payment_status !== 'paid') {
             return response()->json(['status' => 400, 'message' => 'Réservation non payée'], 400);
         }
 
@@ -469,7 +525,7 @@ class PayementController extends Controller
 
         $coach = $reservation->intervenant;
 
-        if (!$coach || !$coach->stripe_account_id || !$coach->stripe_onboarding_completed) {
+        if (! $coach || ! $coach->stripe_account_id || ! $coach->stripe_onboarding_completed) {
             return response()->json(['status' => 400, 'message' => 'Compte Stripe coach non prêt'], 400);
         }
 
@@ -484,7 +540,7 @@ class PayementController extends Controller
                 'amount' => $amountInCents,
                 'currency' => $reservation->currency ?: 'eur',
                 'destination' => $coach->stripe_account_id,
-                'transfer_group' => 'reservation_' . $reservation->id,
+                'transfer_group' => 'reservation_'.$reservation->id,
                 'metadata' => [
                     'reservation_id' => $reservation->id,
                     'payment_intent_id' => $reservation->payment_intent_id,
@@ -499,7 +555,7 @@ class PayementController extends Controller
             }
 
             $transfer = Transfer::create($transferData, [
-                'idempotency_key' => 'reservation_' . $reservation->id . '_coach_transfer',
+                'idempotency_key' => 'reservation_'.$reservation->id.'_coach_transfer',
             ]);
         } catch (\Throwable $e) {
             Log::error('Erreur reversement Stripe Connect', [
@@ -563,7 +619,7 @@ class PayementController extends Controller
 
         $reservation = Reservation::with(['payement'])->findOrFail($id);
 
-        if (!$reservation->payment_intent_id || !$reservation->is_paid) {
+        if (! $reservation->payment_intent_id || ! $reservation->is_paid) {
             return response()->json(['status' => 400, 'message' => 'Aucun paiement à rembourser'], 400);
         }
 
@@ -589,7 +645,7 @@ class PayementController extends Controller
                     'admin_id' => $request->user()?->id,
                 ],
             ], [
-                'idempotency_key' => 'reservation_' . $reservation->id . '_refund_' . $amountInCents,
+                'idempotency_key' => 'reservation_'.$reservation->id.'_refund_'.$amountInCents,
             ]);
 
             if ($reservation->stripe_transfer_id) {
@@ -600,7 +656,7 @@ class PayementController extends Controller
                         'refund_id' => $refund->id,
                     ],
                 ], [
-                    'idempotency_key' => 'reservation_' . $reservation->id . '_transfer_reversal_' . $refund->id,
+                    'idempotency_key' => 'reservation_'.$reservation->id.'_transfer_reversal_'.$refund->id,
                 ]);
             }
         } catch (\Throwable $e) {
@@ -736,7 +792,7 @@ class PayementController extends Controller
 
     private function ensurePrestationCanBeValidated(Reservation $reservation)
     {
-        if (!$reservation->is_paid || $reservation->payment_status !== 'paid') {
+        if (! $reservation->is_paid || $reservation->payment_status !== 'paid') {
             return response()->json(['status' => 400, 'message' => 'La réservation doit être payée avant validation'], 400);
         }
 
@@ -750,7 +806,7 @@ class PayementController extends Controller
 
         $reservation->loadMissing('annonce');
 
-        if ($reservation->status !== 'realise' && !$reservation->hasSessionPassed()) {
+        if ($reservation->status !== 'realise' && ! $reservation->hasSessionPassed()) {
             return response()->json(['status' => 400, 'message' => 'La prestation ne peut être validée qu’après la séance'], 400);
         }
 
@@ -760,18 +816,56 @@ class PayementController extends Controller
     private function notifyReservationUsers(Reservation $reservation, string $event, ?string $message = null): void
     {
         foreach ([$reservation->client, $reservation->intervenant] as $user) {
-            if ($user && $user->email) {
-                try {
-                    $user->notify(new ReservationStatusNotification($reservation, $event, $message));
-                } catch (\Throwable $e) {
-                    Log::warning('Notification réservation non envoyée', [
-                        'reservation_id' => $reservation->id,
-                        'user_id' => $user->id,
-                        'event' => $event,
-                        'error' => $e->getMessage(),
-                    ]);
-                }
-            }
+            $this->notifyReservationUser($reservation, $user, $event, $message);
         }
+    }
+
+    private function notifyReservationUser(
+        Reservation $reservation,
+        $user,
+        string $event,
+        ?string $message = null
+    ): void {
+        if (! $user || ! $user->email) {
+            return;
+        }
+
+        try {
+            $user->notify(new ReservationStatusNotification($reservation, $event, $message));
+        } catch (\Throwable $e) {
+            Log::warning('Notification réservation non envoyée', [
+                'reservation_id' => $reservation->id,
+                'user_id' => $user->id,
+                'event' => $event,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        $title = match ($event) {
+            'paid_awaiting_confirmation' => 'Réservation payée à confirmer',
+            'paid' => 'Paiement Gotfit confirmé',
+            'payment_failed' => 'Paiement Gotfit échoué',
+            'refunded' => 'Remboursement Gotfit',
+            default => 'Mise à jour de réservation',
+        };
+
+        $body = match ($event) {
+            'paid_awaiting_confirmation' => 'Une demande payée attend votre confirmation.',
+            'paid' => 'Votre paiement est confirmé.',
+            'payment_failed' => 'Le paiement de votre réservation a échoué.',
+            'refunded' => 'Votre réservation a été remboursée.',
+            default => 'Le statut de votre réservation a été mis à jour.',
+        };
+
+        SendExpoPushNotification::dispatch(
+            $user->id,
+            $title,
+            $message ?: $body,
+            [
+                'type' => 'reservation',
+                'reservation_id' => $reservation->id,
+                'event' => $event,
+            ]
+        );
     }
 }

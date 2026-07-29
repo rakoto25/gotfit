@@ -13,6 +13,7 @@ use App\Http\Controllers\MessageController;
 use App\Http\Controllers\MissionController;
 use App\Http\Controllers\PayementController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\PushTokenController;
 use App\Http\Controllers\ReservationController;
 use App\Http\Controllers\ReviewController;
 use App\Http\Controllers\SocialAuthController;
@@ -170,9 +171,13 @@ Route::get('/stripe/connect/refresh', [PayementController::class, 'connectRefres
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [ConnexionController::class, 'logout']);
+    Route::post('/push-tokens', [PushTokenController::class, 'store']);
+    Route::delete('/push-tokens', [PushTokenController::class, 'destroy']);
 
     Route::get('/profile', [ProfileController::class, 'show']);
+    Route::post('/profile', [ProfileController::class, 'update']);
     Route::post('/profile/update', [ProfileController::class, 'update']);
+    Route::match(['put', 'patch'], '/profile', [ProfileController::class, 'update']);
 
     /*
     |--------------------------------------------------------------------------
@@ -213,6 +218,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/message/{conversation_id}', [MessageController::class, 'sendMessage'])
         ->whereNumber('conversation_id');
+    Route::match(['put', 'patch'], '/message/{message_id}', [MessageController::class, 'updateMessage'])
+        ->whereNumber('message_id');
+    Route::post('/message/{message_id}/update', [MessageController::class, 'updateMessage'])
+        ->whereNumber('message_id');
+    Route::delete('/message/{message_id}', [MessageController::class, 'destroyMessage'])
+        ->whereNumber('message_id');
 
     Route::post('/message/{message_id}/reaction', [MessageController::class, 'reactToMessage'])
         ->whereNumber('message_id');
@@ -461,6 +472,10 @@ Route::middleware(['auth:sanctum', 'is_client'])->group(function () {
     Route::put('/annonces/{id}/reserve', [AnnonceController::class, 'reserver'])->whereNumber('id');
 
     Route::get('/reservation/client', [ReservationController::class, 'getReservationByClient']);
+    Route::match(['put', 'post'], '/reservation/{id}/reschedule', [ReservationController::class, 'reschedule'])
+        ->whereNumber('id');
+    Route::match(['put', 'patch'], '/reservation/{id}', [ReservationController::class, 'reschedule'])
+        ->whereNumber('id');
 
     Route::post('/create-payment-intent', [PayementController::class, 'createPaymentIntent']);
     Route::get('/payment/status/{id}', [PayementController::class, 'checkPaymentStatus']);

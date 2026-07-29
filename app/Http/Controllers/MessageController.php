@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\SendExpoPushNotification;
 use App\Models\Conversations;
 use App\Models\Message;
 use App\Models\MessageReaction;
@@ -9,6 +10,8 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class MessageController extends Controller
 {
@@ -21,7 +24,7 @@ class MessageController extends Controller
     {
         $currentUser = Auth::user();
 
-        if (!$currentUser) {
+        if (! $currentUser) {
             return response()->json([
                 'status' => 401,
                 'message' => 'Utilisateur non authentifié.',
@@ -72,18 +75,18 @@ class MessageController extends Controller
         $userId = Auth::id();
 
         $conversations = Conversations::with([
-                'client.roles',
-                'intervenant.roles',
-                'messages' => function ($query) {
-                    $query->with([
-                            'sender',
-                            'parent.sender',
-                            'reactions.user',
-                        ])
-                        ->latest()
-                        ->limit(1);
-                },
-            ])
+            'client.roles',
+            'intervenant.roles',
+            'messages' => function ($query) {
+                $query->with([
+                    'sender',
+                    'parent.sender',
+                    'reactions.user',
+                ])
+                    ->latest()
+                    ->limit(1);
+            },
+        ])
             ->where(function ($query) use ($userId) {
                 $query->where('client_id', $userId)
                     ->orWhere('intervenant_id', $userId);
@@ -112,7 +115,7 @@ class MessageController extends Controller
     {
         $user = Auth::user();
 
-        if (!$user) {
+        if (! $user) {
             return response()->json([
                 'status' => 401,
                 'message' => 'Utilisateur non authentifié.',
@@ -164,11 +167,11 @@ class MessageController extends Controller
 
         $this->authorizeConversation($conversation);
 
-        $messages = Message::with([
-                'sender',
-                'parent.sender',
-                'reactions.user',
-            ])
+        $messages = Message::withTrashed()->with([
+            'sender',
+            'parent.sender',
+            'reactions.user',
+        ])
             ->where('conversation_id', $conversation_id)
             ->orderBy('created_at', 'asc')
             ->get();
@@ -203,7 +206,7 @@ class MessageController extends Controller
             'media' => 'nullable|file|mimes:jpg,jpeg,png,webp,gif,mp4,mov,avi,webm,mkv|max:51200',
         ]);
 
-        if (!$request->filled('message') && !$request->hasFile('media')) {
+        if (! $request->filled('message') && ! $request->hasFile('media')) {
             return response()->json([
                 'status' => 422,
                 'message' => 'Le message, la photo ou la vidéo est obligatoire.',
@@ -223,7 +226,7 @@ class MessageController extends Controller
                 ->where('conversation_id', $conversation_id)
                 ->first();
 
-            if (!$parentMessage) {
+            if (! $parentMessage) {
                 return response()->json([
                     'status' => 422,
                     'message' => 'Le message auquel vous répondez est invalide.',
@@ -271,9 +274,128 @@ class MessageController extends Controller
             'reactions.user',
         ]);
 
+        $recipientId = (int) $conversation->client_id === (int) Auth::id()
+            ? $conversation->intervenant_id
+            : $conversation->client_id;
+        $recipient = User::find($recipientId);
+
+        if ($recipient) {
+            SendExpoPushNotification::dispatch(
+                $recipient->id,
+                $message->sender?->name ?: 'Nouveau message Gotfit',
+                $message->message
+                    ? Str::limit($message->message, 120)
+                    : 'Vous a envoyé un média',
+                [
+                    'type' => 'message',
+                    'conversation_id' => $conversation->id,
+                    'message_id' => $message->id,
+                ]
+            );
+        }
+
         return response()->json([
             'status' => 200,
             'message' => $message,
+        ]);
+    }
+
+    public function updateMessage(Request $request, $message_id)
+    {
+        $request->validate([
+            'message' => 'nullable|string|max:5000',
+            'media' => 'nullable|image|mimes:jpg,jpeg,png,webp,gif|max:8192',
+            'remove_media' => 'nullable|boolean',
+        ]);
+
+        $message = Message::findOrFail($message_id);
+        $conversation = Conversations::findOrFail($message->conversation_id);
+        $this->authorizeConversation($conversation);
+
+        abort_unless(
+            (int) $message->sender_id === (int) Auth::id(),
+            403,
+            'Seul l’auteur peut modifier ce message.'
+        );
+
+        $previousMedia = null;
+
+        if ($request->hasFile('media')) {
+            $file = $request->file('media');
+            $newMedia = $file->store('messages/images', 'public');
+            $previousMedia = $message->media_url;
+            $message->media_url = $newMedia;
+            $message->media_type = 'image';
+            $message->type = $request->filled('message') ? 'mixed' : 'image';
+        } elseif ($request->boolean('remove_media')) {
+            $previousMedia = $message->media_url;
+            $message->media_url = null;
+            $message->media_type = null;
+            $message->type = 'text';
+        }
+
+        if ($request->exists('message')) {
+            $message->message = trim((string) $request->input('message')) ?: null;
+        }
+
+        if (! $message->message && ! $message->media_url) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Le message ou son image est obligatoire.',
+            ], 422);
+        }
+
+        $message->edited_at = now();
+        $message->save();
+
+        if (
+            $previousMedia &&
+            $previousMedia !== $message->media_url &&
+            Storage::disk('public')->exists($previousMedia)
+        ) {
+            Storage::disk('public')->delete($previousMedia);
+        }
+
+        $message->load(['sender', 'parent.sender', 'reactions.user']);
+
+        return response()->json([
+            'status' => 200,
+            'message' => $message,
+        ]);
+    }
+
+    public function destroyMessage($message_id)
+    {
+        $message = Message::findOrFail($message_id);
+        $conversation = Conversations::findOrFail($message->conversation_id);
+        $this->authorizeConversation($conversation);
+
+        abort_unless(
+            (int) $message->sender_id === (int) Auth::id(),
+            403,
+            'Seul l’auteur peut supprimer ce message.'
+        );
+
+        if ($message->media_url) {
+            Storage::disk('public')->delete($message->media_url);
+        }
+
+        $message->reactions()->delete();
+        $message->update([
+            // La colonne historique `message` n'est pas nullable sur toutes les
+            // installations. Le contenu est effacé tout en conservant une
+            // valeur vide compatible avec les anciennes bases.
+            'message' => '',
+            'media_url' => null,
+            'media_type' => null,
+            'type' => 'deleted',
+        ]);
+        $message->delete();
+
+        return response()->json([
+            'status' => 200,
+            'deleted' => true,
+            'message' => Message::withTrashed()->find($message->id),
         ]);
     }
 
@@ -351,7 +473,7 @@ class MessageController extends Controller
     {
         $user = Auth::user();
 
-        if (!$user) {
+        if (! $user) {
             abort(401, 'Utilisateur non authentifié');
         }
 

@@ -6,6 +6,7 @@ use App\Models\Annonce;
 use App\Models\BusinessSetting;
 use App\Models\Reservation;
 use App\Notifications\ReservationStatusNotification;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
@@ -36,6 +37,7 @@ class AnnonceController extends Controller
     {
         try {
             $annonces = Annonce::with('user:id,name,email,account_status')->latest()->get();
+
             return response()->json(['status' => 200, 'annonces' => $annonces]);
         } catch (\Exception $e) {
             return response()->json([
@@ -53,6 +55,7 @@ class AnnonceController extends Controller
                 'user:id,name,photo,bio,phone,address,account_status',
                 'reservations',
             ])->findOrFail($id);
+
             return response()->json(['status' => 200, 'annonce' => $annonce]);
         } catch (\Exception $e) {
             return response()->json([
@@ -149,7 +152,7 @@ class AnnonceController extends Controller
         $user = Auth::user();
         $annonce = Annonce::findOrFail($id);
 
-        if (!$user->hasRole('admin') && (int) $annonce->user_id !== (int) $user->id) {
+        if (! $user->hasRole('admin') && (int) $annonce->user_id !== (int) $user->id) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -167,11 +170,22 @@ class AnnonceController extends Controller
         $user_id = Auth::id();
 
         $request->validate([
-            'reservation_date' => 'required|date',
-            'reservation_time' => 'required',
+            'reservation_date' => 'required|date|after_or_equal:today',
+            'reservation_time' => ['required', 'regex:/^\d{2}:\d{2}(:\d{2})?$/'],
             'guests' => 'nullable|integer|min:1',
-            'note' => 'nullable|string',
+            'note' => 'nullable|string|max:1000',
         ]);
+
+        $reservationTime = strlen($request->reservation_time) === 5
+            ? $request->reservation_time.':00'
+            : $request->reservation_time;
+
+        if (Carbon::parse($request->reservation_date.' '.$reservationTime)->isPast()) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Le créneau doit être situé dans le futur.',
+            ], 422);
+        }
 
         $annonce = Annonce::findOrFail($id);
 
@@ -185,12 +199,12 @@ class AnnonceController extends Controller
 
         $existing = Reservation::where('client_id', $user_id)
             ->where('reservation_date', $request->reservation_date)
-            ->where('reservation_time', $request->reservation_time)
+            ->where('reservation_time', $reservationTime)
             ->whereNotIn('status', ['refuse', 'annule'])
             ->first();
 
         if ($existing) {
-            if (!$existing->is_paid && in_array($existing->payment_status, ['unpaid', 'pending', null], true)) {
+            if (! $existing->is_paid && in_array($existing->payment_status, ['unpaid', 'pending', null], true)) {
                 return response()->json([
                     'status' => 200,
                     'message' => 'Réservation déjà créée. Vous pouvez continuer le paiement.',
@@ -204,7 +218,7 @@ class AnnonceController extends Controller
 
         $coachConflict = Reservation::where('intervenant_id', $annonce->user_id)
             ->where('reservation_date', $request->reservation_date)
-            ->where('reservation_time', $request->reservation_time)
+            ->where('reservation_time', $reservationTime)
             ->whereNotIn('status', ['refuse', 'annule'])
             ->whereNotIn('payment_status', ['failed', 'refunded'])
             ->first();
@@ -229,7 +243,7 @@ class AnnonceController extends Controller
             'client_id' => $user_id,
             'intervenant_id' => $annonce->user_id,
             'reservation_date' => $request->reservation_date,
-            'reservation_time' => $request->reservation_time,
+            'reservation_time' => $reservationTime,
             'guests' => $request->guests ?? 1,
             'note' => $request->note,
             'price' => $price,
@@ -242,7 +256,7 @@ class AnnonceController extends Controller
             'currency' => 'eur',
             'status' => 'attente',
             'is_paid' => false,
-            'payment_status' => 'unpaid',
+            'payment_status' => 'pending',
             'prestation_status' => 'pending_payment',
             'payout_status' => 'pending',
         ]);

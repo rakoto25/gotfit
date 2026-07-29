@@ -203,4 +203,9 @@ class User extends Authenticatable
     {
         return $this->hasMany(VisioParticipant::class);
     }
+
+    public function pushTokens(): HasMany
+    {
+        return $this->hasMany(PushToken::class);
+    }
 }

@@ -5,6 +5,7 @@ namespace App\Models;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Reservation extends Model
 {
@@ -73,7 +74,7 @@ class Reservation extends Model
             ? $this->reservation_date->format('Y-m-d')
             : Carbon::parse($this->reservation_date)->format('Y-m-d');
 
-        return Carbon::parse($date . ' ' . $this->reservation_time);
+        return Carbon::parse($date.' '.$this->reservation_time);
     }
 
     public function endsAt(): Carbon
@@ -126,5 +127,11 @@ class Reservation extends Model
     public function notes()
     {
         return $this->hasMany(ClientNote::class);
+    }
+
+    public function rescheduleHistories(): HasMany
+    {
+        return $this->hasMany(ReservationRescheduleHistory::class)
+            ->latest();
     }
 }

@@ -4,10 +4,11 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Message extends Model
 {
-    use HasFactory;
+    use HasFactory, SoftDeletes;
 
     /**
      * Nom exact de la table.
@@ -44,6 +45,8 @@ class Message extends Model
         'is_admin_broadcast' => 'boolean',
         'read_at' => 'datetime',
         'replied_at' => 'datetime',
+        'edited_at' => 'datetime',
+        'deleted_at' => 'datetime',
     ];
 
     /**
@@ -51,6 +54,8 @@ class Message extends Model
      */
     protected $appends = [
         'media_full_url',
+        'is_edited',
+        'is_deleted',
     ];
 
     /**
@@ -122,7 +127,7 @@ class Message extends Model
      */
     public function getMediaFullUrlAttribute()
     {
-        if (!$this->media_url) {
+        if (! $this->media_url) {
             return null;
         }
 
@@ -130,6 +135,16 @@ class Message extends Model
             return $this->media_url;
         }
 
-        return asset('storage/' . $this->media_url);
+        return asset('storage/'.$this->media_url);
+    }
+
+    public function getIsEditedAttribute(): bool
+    {
+        return $this->edited_at !== null;
+    }
+
+    public function getIsDeletedAttribute(): bool
+    {
+        return $this->trashed();
     }
 }

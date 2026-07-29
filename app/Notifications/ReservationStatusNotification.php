@@ -15,8 +15,7 @@ class ReservationStatusNotification extends Notification
         private readonly Reservation $reservation,
         private readonly string $event,
         private readonly ?string $customMessage = null
-    ) {
-    }
+    ) {}
 
     public function via(object $notifiable): array
     {
@@ -29,16 +28,16 @@ class ReservationStatusNotification extends Notification
         $subject = $this->subject();
         $message = $this->customMessage ?: $this->message();
         $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech/webapp'), '/');
-        $reservationUrl = $frontendUrl . '/profile?reservation=' . $reservation->id;
+        $reservationUrl = $frontendUrl.'/profile?reservation='.$reservation->id;
 
         return (new MailMessage)
             ->subject($subject)
-            ->greeting('Bonjour ' . ($notifiable->name ?? '') . ',')
+            ->greeting('Bonjour '.($notifiable->name ?? '').',')
             ->line($message)
-            ->line('Séance : ' . $reservation->calendarTitle())
-            ->line('Date : ' . $reservation->scheduledAt()->format('d/m/Y à H:i'))
-            ->line('Client : ' . ($reservation->client?->name ?: 'Non renseigné'))
-            ->line('Coach : ' . ($reservation->intervenant?->name ?: 'Non renseigné'))
+            ->line('Séance : '.$reservation->calendarTitle())
+            ->line('Date : '.$reservation->scheduledAt()->format('d/m/Y à H:i'))
+            ->line('Client : '.($reservation->client?->name ?: 'Non renseigné'))
+            ->line('Coach : '.($reservation->intervenant?->name ?: 'Non renseigné'))
             ->action('Voir la réservation', $reservationUrl)
             ->line('Merci,')
             ->salutation('L’équipe GotFit');
@@ -51,6 +50,8 @@ class ReservationStatusNotification extends Notification
             'confirmed' => 'Réservation confirmée',
             'refused' => 'Réservation refusée',
             'paid' => 'Paiement confirmé',
+            'paid_awaiting_confirmation' => 'Nouvelle réservation payée à confirmer',
+            'rescheduled' => 'Créneau de réservation modifié',
             'payment_failed' => 'Paiement échoué',
             'pending_validation' => 'Séance terminée : validation demandée',
             'validated' => 'Prestation validée',
@@ -69,6 +70,8 @@ class ReservationStatusNotification extends Notification
             'confirmed' => 'La réservation a été confirmée par le coach.',
             'refused' => 'La réservation a été refusée.',
             'paid' => 'Le paiement de la réservation est confirmé.',
+            'paid_awaiting_confirmation' => 'Une demande payée attend maintenant votre confirmation.',
+            'rescheduled' => 'Le client a modifié le créneau. Une nouvelle confirmation est requise.',
             'payment_failed' => 'Le paiement de la réservation a échoué.',
             'pending_validation' => 'La séance est marquée comme réalisée. Le client peut confirmer la prestation ou ouvrir un litige.',
             'validated' => 'La prestation est validée. Le reversement coach peut être déclenché.',
