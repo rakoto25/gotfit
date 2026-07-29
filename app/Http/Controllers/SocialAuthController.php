@@ -24,10 +24,17 @@ class SocialAuthController extends Controller
      */
     public function google(Request $request): JsonResponse
     {
+        if ($request->filled('siret')) {
+            $request->merge([
+                'siret' => preg_replace('/\D+/', '', (string) $request->input('siret')),
+            ]);
+        }
+
         $validated = $request->validate([
             'credential' => ['required', 'string', 'max:4096'],
             'role' => ['nullable', Rule::in(['client', 'intervenant'])],
             'device_name' => ['nullable', 'string', 'max:100'],
+            'siret' => ['nullable', 'digits:14'],
         ]);
 
         $clientId = (string) config('services.google.client_id');
@@ -82,11 +89,30 @@ class SocialAuthController extends Controller
         $roleSlug = $validated['role'] ?? 'client';
         $isNewUser = false;
 
+        if (
+            isset($validated['siret'])
+            && User::where('siret', $validated['siret'])
+                ->where('email', '!=', $email)
+                ->where(function ($query) use ($googleId) {
+                    $query->whereNull('google_id')
+                        ->orWhere('google_id', '!=', $googleId);
+                })
+                ->exists()
+        ) {
+            return response()->json([
+                'message' => 'Ce numéro de SIRET est déjà utilisé.',
+                'errors' => [
+                    'siret' => ['Ce numéro de SIRET est déjà utilisé.'],
+                ],
+            ], 422);
+        }
+
         $user = DB::transaction(function () use (
             $email,
             $googleId,
             $identity,
             $roleSlug,
+            $validated,
             &$isNewUser
         ) {
             $user = User::query()
@@ -111,6 +137,9 @@ class SocialAuthController extends Controller
                     'email_verified_at' => now(),
                     'last_login_at' => now(),
                     'account_status' => $roleSlug === 'intervenant' ? 'pending' : 'approved',
+                    'siret' => $roleSlug === 'intervenant'
+                        ? ($validated['siret'] ?? null)
+                        : null,
                 ]);
 
                 $role = Role::firstOrCreate(
@@ -124,13 +153,23 @@ class SocialAuthController extends Controller
 
                 $user->roles()->syncWithoutDetaching([$role->id]);
             } else {
-                $user->forceFill([
+                $updates = [
                     'google_id' => $user->google_id ?: $googleId,
                     'auth_provider' => 'google',
                     'google_avatar_url' => $identity['picture'] ?? $user->google_avatar_url,
                     'email_verified_at' => $user->email_verified_at ?: now(),
                     'last_login_at' => now(),
-                ])->save();
+                ];
+
+                if (
+                    isset($validated['siret'])
+                    && $user->hasRole('intervenant')
+                    && ! $user->siret
+                ) {
+                    $updates['siret'] = $validated['siret'];
+                }
+
+                $user->forceFill($updates)->save();
             }
 
             return $user;
@@ -140,6 +179,13 @@ class SocialAuthController extends Controller
             ->createToken($validated['device_name'] ?? 'gotfit-webapp')
             ->plainTextToken;
 
+        $user->load('roles');
+        $hasProfessionalDocument = $user->documents()
+            ->whereIn('document_type', ['diploma', 'certification'])
+            ->exists();
+        $requiresProfessionalCompletion = $user->hasRole('intervenant')
+            && (! $user->siret || ! $hasProfessionalDocument);
+
         return response()->json([
             'message' => $isNewUser
                 ? 'Votre compte Gotfit a été créé avec Google.'
@@ -147,6 +193,13 @@ class SocialAuthController extends Controller
             'is_new_user' => $isNewUser,
             'token' => $token,
             'user' => $user->fresh()->load('roles'),
+            'professional_profile' => [
+                'requires_completion' => $requiresProfessionalCompletion,
+                'missing_fields' => array_values(array_filter([
+                    ! $user->siret ? 'siret' : null,
+                    ! $hasProfessionalDocument ? 'diploma_or_certification' : null,
+                ])),
+            ],
         ], $isNewUser ? 201 : 200);
     }
 }

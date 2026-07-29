@@ -135,6 +135,12 @@ class AdminController extends Controller
 
     public function createUser(Request $request)
     {
+        if ($request->filled('siret')) {
+            $request->merge([
+                'siret' => preg_replace('/\D+/', '', (string) $request->input('siret')),
+            ]);
+        }
+
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'unique:users,email'],
@@ -142,6 +148,7 @@ class AdminController extends Controller
 
             'phone' => ['nullable', 'string', 'max:50'],
             'address' => ['nullable', 'string', 'max:255'],
+            'siret' => ['nullable', 'digits:14', 'unique:users,siret'],
             'bio' => ['nullable', 'string'],
             'coach_title' => ['nullable', 'string', 'max:255'],
             'coach_short_description' => ['nullable', 'string', 'max:500'],
@@ -170,6 +177,10 @@ class AdminController extends Controller
 
         if (Schema::hasColumn('users', 'address')) {
             $userData['address'] = $data['address'] ?? null;
+        }
+
+        if (Schema::hasColumn('users', 'siret')) {
+            $userData['siret'] = $data['siret'] ?? null;
         }
 
         if (Schema::hasColumn('users', 'bio')) {
@@ -230,6 +241,12 @@ class AdminController extends Controller
     {
         $user = User::findOrFail($id);
 
+        if ($request->filled('siret')) {
+            $request->merge([
+                'siret' => preg_replace('/\D+/', '', (string) $request->input('siret')),
+            ]);
+        }
+
         $data = $request->validate([
             'name' => ['nullable', 'string', 'max:255'],
 
@@ -243,6 +260,11 @@ class AdminController extends Controller
 
             'phone' => ['nullable', 'string', 'max:50'],
             'address' => ['nullable', 'string', 'max:255'],
+            'siret' => [
+                'nullable',
+                'digits:14',
+                Rule::unique('users', 'siret')->ignore($user->id),
+            ],
             'bio' => ['nullable', 'string'],
             'coach_title' => ['nullable', 'string', 'max:255'],
             'coach_short_description' => ['nullable', 'string', 'max:500'],
@@ -270,7 +292,7 @@ class AdminController extends Controller
             $user->email = $data['email'];
         }
 
-        if (!empty($data['password'])) {
+        if (! empty($data['password'])) {
             $user->password = Hash::make($data['password']);
         }
 
@@ -280,6 +302,15 @@ class AdminController extends Controller
 
         if (Schema::hasColumn('users', 'address') && array_key_exists('address', $data)) {
             $user->address = $data['address'];
+        }
+
+        if (Schema::hasColumn('users', 'siret') && array_key_exists('siret', $data)) {
+            if ($user->siret !== $data['siret']) {
+                $user->siret_verified_at = null;
+                $user->siret_verified_by = null;
+            }
+
+            $user->siret = $data['siret'];
         }
 
         if (Schema::hasColumn('users', 'bio') && array_key_exists('bio', $data)) {
@@ -406,7 +437,7 @@ class AdminController extends Controller
             $updateData['rejection_reason'] = $request->rejection_reason;
         }
 
-        if (!empty($updateData)) {
+        if (! empty($updateData)) {
             $user->update($updateData);
         }
 
@@ -414,6 +445,42 @@ class AdminController extends Controller
             'status' => 200,
             'message' => 'Statut utilisateur mis à jour',
             'user' => $user->load('roles'),
+        ]);
+    }
+
+    public function verifySiret(Request $request, $id)
+    {
+        $data = $request->validate([
+            'verified' => ['required', 'boolean'],
+        ]);
+
+        $user = User::with('roles')->findOrFail($id);
+
+        if (! $user->hasRole('intervenant')) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'La vérification SIRET concerne uniquement les coachs.',
+            ], 422);
+        }
+
+        if (! $user->siret) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Ce coach doit d’abord renseigner son numéro de SIRET.',
+            ], 422);
+        }
+
+        $user->update([
+            'siret_verified_at' => $data['verified'] ? now() : null,
+            'siret_verified_by' => $data['verified'] ? Auth::id() : null,
+        ]);
+
+        return response()->json([
+            'status' => 200,
+            'message' => $data['verified']
+                ? 'Numéro de SIRET marqué comme vérifié.'
+                : 'Vérification du SIRET retirée.',
+            'user' => $user->fresh()->load('roles'),
         ]);
     }
 
@@ -545,4 +612,3 @@ class AdminController extends Controller
         };
     }
 }
-

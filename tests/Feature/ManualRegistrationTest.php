@@ -42,10 +42,25 @@ class ManualRegistrationTest extends TestCase
             'password' => 'mot-de-passe-solide',
             'password_confirmation' => 'mot-de-passe-solide',
             'role' => 'intervenant',
+            'siret' => '123 456 789 00012',
         ])
             ->assertCreated()
             ->assertJsonPath('user.account_status', 'pending')
+            ->assertJsonPath('user.siret', '12345678900012')
             ->assertJsonPath('user.roles.0.slug', 'intervenant');
+    }
+
+    public function test_siret_is_required_for_coach_registration(): void
+    {
+        $this->postJson('/api/register', [
+            'name' => 'Coach sans SIRET',
+            'email' => 'coach-sans-siret@example.com',
+            'password' => 'mot-de-passe-solide',
+            'password_confirmation' => 'mot-de-passe-solide',
+            'role' => 'intervenant',
+        ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('siret');
     }
 
     public function test_password_confirmation_is_required(): void

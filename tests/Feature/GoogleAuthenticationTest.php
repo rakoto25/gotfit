@@ -89,6 +89,31 @@ class GoogleAuthenticationTest extends TestCase
         $this->assertFalse($user->fresh()->hasRole('intervenant'));
     }
 
+    public function test_google_coach_is_redirected_to_professional_profile_completion(): void
+    {
+        Http::fake([
+            'https://oauth2.googleapis.com/tokeninfo*' => Http::response([
+                'sub' => 'google-coach-456',
+                'aud' => 'gotfit-web-client.apps.googleusercontent.com',
+                'iss' => 'https://accounts.google.com',
+                'email' => 'coach-google@example.com',
+                'email_verified' => 'true',
+                'name' => 'Coach Google',
+                'exp' => now()->addHour()->timestamp,
+            ]),
+        ]);
+
+        $this->postJson('/api/auth/google', [
+            'credential' => 'signed-google-coach-credential',
+            'role' => 'intervenant',
+        ])
+            ->assertCreated()
+            ->assertJsonPath('user.account_status', 'pending')
+            ->assertJsonPath('professional_profile.requires_completion', true)
+            ->assertJsonPath('professional_profile.missing_fields.0', 'siret')
+            ->assertJsonPath('professional_profile.missing_fields.1', 'diploma_or_certification');
+    }
+
     public function test_google_login_rejects_a_token_for_another_application(): void
     {
         Http::fake([

@@ -40,6 +40,9 @@ class User extends Authenticatable
         'coach_languages',
         'phone',
         'address',
+        'siret',
+        'siret_verified_at',
+        'siret_verified_by',
         'account_status',
         'validated_by',
         'validated_at',
@@ -86,6 +89,7 @@ class User extends Authenticatable
         'stripe_onboarding_completed' => 'boolean',
         'presentation_video_duration_seconds' => 'integer',
         'coach_experience_years' => 'integer',
+        'siret_verified_at' => 'datetime',
     ];
 
     /**
@@ -167,6 +171,16 @@ class User extends Authenticatable
     public function documents(): HasMany
     {
         return $this->hasMany(Document::class);
+    }
+
+    public function fitnessAssessments(): HasMany
+    {
+        return $this->hasMany(FitnessAssessment::class, 'client_id');
+    }
+
+    public function reviewedFitnessAssessments(): HasMany
+    {
+        return $this->hasMany(FitnessAssessment::class, 'reviewed_by');
     }
 
     public function missions(): HasMany

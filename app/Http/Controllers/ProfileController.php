@@ -17,6 +17,12 @@ class ProfileController extends Controller
         /** @var User $user */
         $user = $request->user();
 
+        if ($request->filled('siret')) {
+            $request->merge([
+                'siret' => preg_replace('/\D+/', '', (string) $request->input('siret')),
+            ]);
+        }
+
         $user->load('roles');
 
         return response()->json([
@@ -60,6 +66,13 @@ class ProfileController extends Controller
             'coach_languages' => ['sometimes', 'nullable', 'string', 'max:500'],
             'phone' => ['sometimes', 'nullable', 'string', 'max:50'],
             'address' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'siret' => [
+                'sometimes',
+                'required',
+                Rule::prohibitedIf(fn () => ! $user->hasRole('intervenant')),
+                'digits:14',
+                Rule::unique('users', 'siret')->ignore($user->id),
+            ],
 
             'photo' => ['sometimes', 'nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp,image/heic,image/heif', 'mimes:jpg,jpeg,png,webp,heic,heif', 'max:8192'],
             'cover_photo' => ['sometimes', 'nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp,image/heic,image/heif', 'mimes:jpg,jpeg,png,webp,heic,heif', 'max:12288'],
@@ -99,6 +112,16 @@ class ProfileController extends Controller
         foreach (['name', 'email', 'bio', 'phone', 'address'] as $column) {
             if ($request->exists($column)) {
                 $data[$column] = $validated[$column] ?? null;
+            }
+        }
+
+        if (Schema::hasColumn('users', 'siret') && $request->exists('siret')) {
+            $nextSiret = $validated['siret'] ?? null;
+            $data['siret'] = $nextSiret;
+
+            if ($nextSiret !== $user->siret) {
+                $data['siret_verified_at'] = null;
+                $data['siret_verified_by'] = null;
             }
         }
 
@@ -260,6 +283,9 @@ class ProfileController extends Controller
             'bio' => $this->getUserValue($user, 'bio'),
             'phone' => $this->getUserValue($user, 'phone'),
             'address' => $this->getUserValue($user, 'address'),
+            'siret' => $this->getUserValue($user, 'siret'),
+            'siret_verified_at' => $this->getUserValue($user, 'siret_verified_at'),
+            'siret_verified' => $this->getUserValue($user, 'siret_verified_at') !== null,
 
             'account_status' => $this->getUserValue($user, 'account_status'),
             'roles' => $user->roles,
@@ -280,6 +306,17 @@ class ProfileController extends Controller
             'coach_experience_years' => $this->getUserValue($user, 'coach_experience_years'),
             'coach_certifications' => $this->getUserValue($user, 'coach_certifications'),
             'coach_languages' => $this->getUserValue($user, 'coach_languages'),
+            'professional_documents' => [
+                'total' => $user->documents()->count(),
+                'validated' => $user->documents()->where('status', 'valide')->count(),
+                'requires_completion' => $user->hasRole('intervenant')
+                    && (
+                        ! $this->getUserValue($user, 'siret')
+                        || ! $user->documents()
+                            ->whereIn('document_type', ['diploma', 'certification'])
+                            ->exists()
+                    ),
+            ],
 
             'created_at' => $user->created_at,
             'updated_at' => $user->updated_at,

@@ -18,6 +18,12 @@ class InscriptionController extends Controller
      */
     public function register(Request $request): JsonResponse
     {
+        if ($request->filled('siret')) {
+            $request->merge([
+                'siret' => preg_replace('/\D+/', '', (string) $request->input('siret')),
+            ]);
+        }
+
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
@@ -25,9 +31,18 @@ class InscriptionController extends Controller
             'role' => ['nullable', Rule::in(['client', 'intervenant', 'structure'])],
             'phone' => ['nullable', 'string', 'max:50'],
             'address' => ['nullable', 'string', 'max:255'],
+            'siret' => [
+                'required_if:role,intervenant',
+                'nullable',
+                'digits:14',
+                'unique:users,siret',
+            ],
             'device_name' => ['nullable', 'string', 'max:100'],
         ], [
             'role.in' => 'Le rôle choisi est invalide. L’inscription publique accepte uniquement client, intervenant ou structure.',
+            'siret.required_if' => 'Le numéro de SIRET est obligatoire pour inscrire un coach.',
+            'siret.digits' => 'Le numéro de SIRET doit contenir exactement 14 chiffres.',
+            'siret.unique' => 'Ce numéro de SIRET est déjà utilisé.',
         ]);
 
         $roleSlug = $validated['role'] ?? 'client';
@@ -39,6 +54,9 @@ class InscriptionController extends Controller
                 'password' => Hash::make($validated['password']),
                 'phone' => $validated['phone'] ?? null,
                 'address' => $validated['address'] ?? null,
+                'siret' => $roleSlug === 'intervenant'
+                    ? ($validated['siret'] ?? null)
+                    : null,
                 // Le client peut réserver immédiatement. Les comptes professionnels
                 // restent en attente de validation par l'administrateur.
                 'account_status' => in_array($roleSlug, ['intervenant', 'structure'], true)
@@ -69,6 +87,15 @@ class InscriptionController extends Controller
             'message' => 'Inscription réussie',
             'token' => $token,
             'user' => $user->load('roles'),
+            'professional_profile' => [
+                'requires_completion' => $roleSlug === 'intervenant',
+                'missing_fields' => $roleSlug === 'intervenant'
+                    ? ['diploma_or_certification']
+                    : [],
+                'required_documents' => $roleSlug === 'intervenant'
+                    ? ['diploma_or_certification']
+                    : [],
+            ],
         ], 201);
     }
 }

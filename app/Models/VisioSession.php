@@ -9,6 +9,10 @@ class VisioSession extends Model
 {
     use HasFactory;
 
+    public const MAX_CLIENT_PARTICIPANTS_V1 = 2;
+
+    public const MAX_ATTENDEES_V1 = 3;
+
     protected $fillable = [
         'reservation_id',
         'annonce_id',
@@ -46,6 +50,8 @@ class VisioSession extends Model
         'paid_participants_count',
         'available_places',
         'is_confirmed_by_minimum',
+        'effective_max_participants',
+        'max_attendees',
     ];
 
     public function reservation()
@@ -92,19 +98,29 @@ class VisioSession extends Model
 
     public function getAvailablePlacesAttribute(): ?int
     {
-        if (!$this->max_participants) {
-            return null;
-        }
-
         $reservedCount = $this->clientParticipants()
             ->whereIn('status', ['reserved', 'paid', 'joined', 'left'])
             ->count();
 
-        return max(0, $this->max_participants - $reservedCount);
+        return max(0, $this->effective_max_participants - $reservedCount);
     }
 
     public function getIsConfirmedByMinimumAttribute(): bool
     {
         return $this->paid_participants_count >= $this->min_participants;
+    }
+
+    public function getEffectiveMaxParticipantsAttribute(): int
+    {
+        if (! $this->max_participants) {
+            return self::MAX_CLIENT_PARTICIPANTS_V1;
+        }
+
+        return min($this->max_participants, self::MAX_CLIENT_PARTICIPANTS_V1);
+    }
+
+    public function getMaxAttendeesAttribute(): int
+    {
+        return 1 + $this->effective_max_participants;
     }
 }

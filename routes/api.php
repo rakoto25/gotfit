@@ -8,6 +8,7 @@ use App\Http\Controllers\ConnexionController;
 use App\Http\Controllers\ContactController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\FavoriteController;
+use App\Http\Controllers\FitnessAssessmentController;
 use App\Http\Controllers\InscriptionController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\MissionController;
@@ -283,6 +284,17 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/client/onboarding', [ClientJourneyController::class, 'saveMyOnboarding']);
     Route::patch('/client/onboarding', [ClientJourneyController::class, 'saveMyOnboarding']);
 
+    Route::get('/fitness-assessment/form', [FitnessAssessmentController::class, 'activeForm']);
+    Route::get('/fitness-assessment', [FitnessAssessmentController::class, 'mine']);
+    Route::put('/fitness-assessment', [FitnessAssessmentController::class, 'saveMine']);
+    Route::patch('/fitness-assessment', [FitnessAssessmentController::class, 'saveMine']);
+    Route::get('/clients/{client}/fitness-assessments', [FitnessAssessmentController::class, 'byClient'])
+        ->whereNumber('client');
+    Route::put('/fitness-assessments/{assessment}/review', [FitnessAssessmentController::class, 'review'])
+        ->whereNumber('assessment');
+    Route::patch('/fitness-assessments/{assessment}/review', [FitnessAssessmentController::class, 'review'])
+        ->whereNumber('assessment');
+
     /*
     |--------------------------------------------------------------------------
     | RÉSERVATION GÉNÉRIQUE
@@ -348,6 +360,7 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
     Route::delete('/users/{id}', [AdminController::class, 'deleteUser'])->whereNumber('id');
 
     Route::put('/users/{id}/validate', [AdminController::class, 'validateUser'])->whereNumber('id');
+    Route::put('/users/{id}/siret/verify', [AdminController::class, 'verifySiret'])->whereNumber('id');
 
     /*
     |--------------------------------------------------------------------------
@@ -395,6 +408,13 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
     Route::delete('/documents/{id}', [DocumentController::class, 'destroy'])->whereNumber('id');
     Route::put('/documents/{id}/valider', [DocumentController::class, 'validerDocument'])->whereNumber('id');
     Route::put('/documents/{id}/refuser', [DocumentController::class, 'refuserDocument'])->whereNumber('id');
+
+    Route::get('/admin/fitness-assessment/forms', [FitnessAssessmentController::class, 'forms']);
+    Route::post('/admin/fitness-assessment/forms', [FitnessAssessmentController::class, 'storeForm']);
+    Route::put('/admin/fitness-assessment/forms/{form}', [FitnessAssessmentController::class, 'updateForm'])
+        ->whereNumber('form');
+    Route::patch('/admin/fitness-assessment/forms/{form}', [FitnessAssessmentController::class, 'updateForm'])
+        ->whereNumber('form');
 
     /*
     |--------------------------------------------------------------------------
@@ -445,6 +465,10 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
 */
 
 Route::middleware(['auth:sanctum', 'is_intervenant'])->group(function () {
+    Route::get('/coach/credentials', [DocumentController::class, 'myCredentials']);
+    Route::post('/coach/credentials', [DocumentController::class, 'storeCredential']);
+    Route::delete('/coach/credentials/{id}', [DocumentController::class, 'destroy'])->whereNumber('id');
+
     Route::post('/annonces', [AnnonceController::class, 'store']);
     Route::put('/annonces/{id}', [AnnonceController::class, 'update'])->whereNumber('id');
     Route::post('/annonces/{id}/boost', [AnnonceController::class, 'boost'])->whereNumber('id');

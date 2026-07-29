@@ -2,15 +2,16 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Reservation;
 use App\Models\User;
 use App\Models\VisioParticipant;
 use App\Models\VisioSession;
-use App\Models\Reservation;
 use App\Services\ReservationVisioService;
-use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class VisioSessionController extends Controller
 {
@@ -24,7 +25,7 @@ class VisioSessionController extends Controller
                     $query->whereIn('status', ['reserved', 'paid', 'joined', 'left']);
                 },
             ])
-            ->when(!$user || (!$user->hasRole('admin') && !$request->boolean('mine')), function ($query) {
+            ->when(! $user || (! $user->hasRole('admin') && ! $request->boolean('mine')), function ($query) {
                 $query->whereNull('reservation_id')
                     ->whereIn('status', ['open', 'confirmed', 'live']);
             })
@@ -64,7 +65,7 @@ class VisioSessionController extends Controller
             ])
             ->findOrFail($id);
 
-        if (!$this->canViewSession($request->user(), $session)) {
+        if (! $this->canViewSession($request->user(), $session)) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -86,7 +87,7 @@ class VisioSessionController extends Controller
     {
         $user = $request->user();
 
-        if (!$user->hasRole('intervenant') && !$user->hasRole('admin')) {
+        if (! $user->hasRole('intervenant') && ! $user->hasRole('admin')) {
             return response()->json([
                 'status' => 403,
                 'message' => 'Accès réservé aux coachs/intervenants',
@@ -98,8 +99,8 @@ class VisioSessionController extends Controller
             'description' => ['nullable', 'string', 'max:5000'],
             'start_at' => ['required', 'date'],
             'duration_minutes' => ['nullable', 'integer', 'min:15', 'max:360'],
-            'min_participants' => ['nullable', 'integer', 'min:1', 'max:100'],
-            'max_participants' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'min_participants' => ['nullable', 'integer', 'min:1', 'max:2'],
+            'max_participants' => ['nullable', 'integer', 'min:1', 'max:2'],
             'price' => ['nullable', 'numeric', 'min:0', 'max:999999'],
             'currency' => ['nullable', 'string', 'size:3'],
             'status' => ['nullable', Rule::in(['draft', 'open'])],
@@ -108,8 +109,8 @@ class VisioSessionController extends Controller
             'join_url' => ['nullable', 'url', 'max:500'],
         ]);
 
-        $minParticipants = (int) ($data['min_participants'] ?? 2);
-        $maxParticipants = isset($data['max_participants']) ? (int) $data['max_participants'] : null;
+        $minParticipants = (int) ($data['min_participants'] ?? 1);
+        $maxParticipants = (int) ($data['max_participants'] ?? VisioSession::MAX_CLIENT_PARTICIPANTS_V1);
 
         if ($maxParticipants !== null && $maxParticipants < $minParticipants) {
             return response()->json([
@@ -159,7 +160,7 @@ class VisioSessionController extends Controller
     {
         $session = VisioSession::findOrFail($id);
 
-        if (!$this->canManageSession($request->user(), $session)) {
+        if (! $this->canManageSession($request->user(), $session)) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -175,8 +176,8 @@ class VisioSessionController extends Controller
             'description' => ['nullable', 'string', 'max:5000'],
             'start_at' => ['nullable', 'date'],
             'duration_minutes' => ['nullable', 'integer', 'min:15', 'max:360'],
-            'min_participants' => ['nullable', 'integer', 'min:1', 'max:100'],
-            'max_participants' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'min_participants' => ['nullable', 'integer', 'min:1', 'max:2'],
+            'max_participants' => ['nullable', 'integer', 'min:1', 'max:2'],
             'price' => ['nullable', 'numeric', 'min:0', 'max:999999'],
             'currency' => ['nullable', 'string', 'size:3'],
             'status' => ['nullable', Rule::in(['draft', 'open'])],
@@ -187,8 +188,8 @@ class VisioSessionController extends Controller
 
         $minParticipants = (int) ($data['min_participants'] ?? $session->min_participants);
         $maxParticipants = array_key_exists('max_participants', $data)
-            ? ($data['max_participants'] ? (int) $data['max_participants'] : null)
-            : $session->max_participants;
+            ? (int) $data['max_participants']
+            : $session->effective_max_participants;
 
         if ($maxParticipants !== null && $maxParticipants < $minParticipants) {
             return response()->json([
@@ -196,6 +197,21 @@ class VisioSessionController extends Controller
                 'message' => 'Le nombre maximum de participants doit être supérieur ou égal au minimum.',
             ], 422);
         }
+
+        $activeParticipants = $session->clientParticipants()
+            ->whereIn('status', ['reserved', 'paid', 'joined', 'left'])
+            ->count();
+
+        if ($maxParticipants < $activeParticipants) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Le maximum ne peut pas être inférieur au nombre de coachés déjà inscrits.',
+                'active_participants_count' => $activeParticipants,
+            ], 422);
+        }
+
+        $data['min_participants'] = $minParticipants;
+        $data['max_participants'] = $maxParticipants;
 
         if (isset($data['currency'])) {
             $data['currency'] = strtoupper($data['currency']);
@@ -218,18 +234,18 @@ class VisioSessionController extends Controller
         $session = VisioSession::with('participants')->findOrFail($id);
         $user = $request->user();
 
-        if (!$user->hasRole('client')) {
+        if (! $user->hasRole('client')) {
             return response()->json(['status' => 403, 'message' => 'Accès réservé aux clients'], 403);
         }
 
         if ($session->reservation_id) {
             $reservation = Reservation::find($session->reservation_id);
 
-            if (!$reservation || (int) $reservation->client_id !== (int) $user->id) {
+            if (! $reservation || (int) $reservation->client_id !== (int) $user->id) {
                 return response()->json(['status' => 403, 'message' => 'Cette visio est privée et liée à une autre réservation.'], 403);
             }
 
-            if (!$reservation->is_paid && $reservation->payment_status !== 'paid') {
+            if (! $reservation->is_paid && $reservation->payment_status !== 'paid') {
                 return response()->json(['status' => 402, 'message' => 'Le paiement de la réservation doit être confirmé.'], 402);
             }
 
@@ -247,7 +263,7 @@ class VisioSessionController extends Controller
             return response()->json(['status' => 422, 'message' => 'Le coach ne peut pas réserver sa propre séance.'], 422);
         }
 
-        if (!in_array($session->status, ['open', 'confirmed'], true)) {
+        if (! in_array($session->status, ['open', 'confirmed'], true)) {
             return response()->json(['status' => 422, 'message' => 'Cette séance visio n’est pas ouverte aux réservations.'], 422);
         }
 
@@ -255,7 +271,7 @@ class VisioSessionController extends Controller
             return response()->json(['status' => 422, 'message' => 'Cette séance visio est déjà passée.'], 422);
         }
 
-        if ($session->max_participants && $session->available_places <= 0) {
+        if ($session->available_places <= 0) {
             return response()->json(['status' => 422, 'message' => 'Cette séance visio est complète.'], 422);
         }
 
@@ -263,7 +279,7 @@ class VisioSessionController extends Controller
             ->where('user_id', $user->id)
             ->first();
 
-        if ($participant && !in_array($participant->status, ['cancelled', 'no_show'], true)) {
+        if ($participant && ! in_array($participant->status, ['cancelled', 'no_show'], true)) {
             return response()->json([
                 'status' => 200,
                 'message' => 'Vous êtes déjà inscrit à cette séance visio.',
@@ -274,21 +290,42 @@ class VisioSessionController extends Controller
 
         $isFree = (float) $session->price <= 0;
 
-        $participant = VisioParticipant::updateOrCreate(
-            [
-                'visio_session_id' => $session->id,
-                'user_id' => $user->id,
-            ],
-            [
-                'role' => 'participant',
-                'status' => $isFree ? 'paid' : 'reserved',
-                'payment_status' => $isFree ? 'paid' : 'unpaid',
-                'amount' => $session->price,
-                'currency' => $session->currency,
-                'paid_at' => $isFree ? now() : null,
-                'cancelled_at' => null,
-            ]
-        );
+        $participant = DB::transaction(function () use ($session, $user, $isFree) {
+            $lockedSession = VisioSession::whereKey($session->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $existingParticipant = VisioParticipant::where('visio_session_id', $lockedSession->id)
+                ->where('user_id', $user->id)
+                ->first();
+
+            if (
+                ! $existingParticipant
+                || in_array($existingParticipant->status, ['cancelled', 'no_show'], true)
+            ) {
+                if ($lockedSession->available_places <= 0) {
+                    throw ValidationException::withMessages([
+                        'session' => ['Cette séance visio est complète (deux coachés maximum).'],
+                    ]);
+                }
+            }
+
+            return VisioParticipant::updateOrCreate(
+                [
+                    'visio_session_id' => $lockedSession->id,
+                    'user_id' => $user->id,
+                ],
+                [
+                    'role' => 'participant',
+                    'status' => $isFree ? 'paid' : 'reserved',
+                    'payment_status' => $isFree ? 'paid' : 'unpaid',
+                    'amount' => $lockedSession->price,
+                    'currency' => $lockedSession->currency,
+                    'paid_at' => $isFree ? now() : null,
+                    'cancelled_at' => null,
+                ]
+            );
+        });
 
         $this->refreshSessionStatus($session);
 
@@ -306,7 +343,7 @@ class VisioSessionController extends Controller
     {
         $session = VisioSession::findOrFail($id);
 
-        if (!$this->canManageSession($request->user(), $session)) {
+        if (! $this->canManageSession($request->user(), $session)) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -339,7 +376,7 @@ class VisioSessionController extends Controller
     {
         $session = VisioSession::findOrFail($id);
 
-        if (!$this->canManageSession($request->user(), $session)) {
+        if (! $this->canManageSession($request->user(), $session)) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -349,7 +386,7 @@ class VisioSessionController extends Controller
         if ($paidCount < $session->min_participants) {
             return response()->json([
                 'status' => 422,
-                'message' => 'La visio nécessite au minimum ' . $session->min_participants . ' participants clients payés/validés.',
+                'message' => 'La visio nécessite au minimum '.$session->min_participants.' participants clients payés/validés.',
                 'paid_participants_count' => $paidCount,
             ], 422);
         }
@@ -384,7 +421,7 @@ class VisioSessionController extends Controller
             ->where('user_id', $user->id)
             ->first();
 
-        if (!$participant && !$this->canManageSession($user, $session)) {
+        if (! $participant && ! $this->canManageSession($user, $session)) {
             return response()->json(['status' => 403, 'message' => 'Vous n’êtes pas autorisé à rejoindre cette séance visio.'], 403);
         }
 
@@ -464,7 +501,7 @@ class VisioSessionController extends Controller
     {
         $session = VisioSession::findOrFail($id);
 
-        if (!$this->canManageSession($request->user(), $session)) {
+        if (! $this->canManageSession($request->user(), $session)) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -491,7 +528,7 @@ class VisioSessionController extends Controller
     {
         $session = VisioSession::findOrFail($id);
 
-        if (!$this->canManageSession($request->user(), $session)) {
+        if (! $this->canManageSession($request->user(), $session)) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -523,7 +560,7 @@ class VisioSessionController extends Controller
     {
         $session = VisioSession::findOrFail($id);
 
-        if (!$this->canManageSession($request->user(), $session)) {
+        if (! $this->canManageSession($request->user(), $session)) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -556,7 +593,7 @@ class VisioSessionController extends Controller
     private function canViewSession(?User $user, VisioSession $session): bool
     {
         if ($session->reservation_id) {
-            if (!$user) {
+            if (! $user) {
                 return false;
             }
 
@@ -570,7 +607,7 @@ class VisioSessionController extends Controller
             return true;
         }
 
-        if (!$user) {
+        if (! $user) {
             return false;
         }
 
@@ -590,75 +627,75 @@ class VisioSessionController extends Controller
         $base = Str::slug($title) ?: 'visio-gotfit';
 
         do {
-            $roomName = $base . '-' . Str::lower(Str::random(10));
+            $roomName = $base.'-'.Str::lower(Str::random(10));
         } while (VisioSession::where('room_name', $roomName)->exists());
 
         return $roomName;
     }
 
-private function makeVideoToken(VisioSession $session, User $user, string $role): string
-{
-    $now = time();
-    $provider = strtolower((string) ($session->provider ?: config('services.visio.provider', 'livekit')));
+    private function makeVideoToken(VisioSession $session, User $user, string $role): string
+    {
+        $now = time();
+        $provider = strtolower((string) ($session->provider ?: config('services.visio.provider', 'livekit')));
 
-    if ($provider === 'livekit') {
-        $apiKey = config('services.visio.api_key');
-        $apiSecret = config('services.visio.api_secret');
+        if ($provider === 'livekit') {
+            $apiKey = config('services.visio.api_key');
+            $apiSecret = config('services.visio.api_secret');
 
-        if (!$apiKey || !$apiSecret) {
-            abort(500, 'Configuration LiveKit manquante : VISIO_API_KEY ou VISIO_API_SECRET.');
+            if (! $apiKey || ! $apiSecret) {
+                abort(500, 'Configuration LiveKit manquante : VISIO_API_KEY ou VISIO_API_SECRET.');
+            }
+
+            $payload = [
+                'iss' => $apiKey,
+                'sub' => 'gotfit-user-'.$user->id.'-session-'.$session->id,
+                'name' => $user->name,
+                'iat' => $now,
+                'nbf' => $now - 10,
+                'exp' => $now + (int) config('services.visio.token_ttl', 3600),
+                'video' => [
+                    'room' => $session->room_name,
+                    'roomJoin' => true,
+                    'canPublish' => true,
+                    'canSubscribe' => true,
+                    'roomAdmin' => $role === 'coach',
+                ],
+                'metadata' => json_encode([
+                    'user_id' => $user->id,
+                    'session_id' => $session->id,
+                    'role' => $role,
+                ]),
+            ];
+
+            return $this->encodeJwt($payload, $apiSecret);
+        }
+
+        $secret = config('services.visio.secret') ?: config('app.key');
+
+        if (Str::startsWith($secret, 'base64:')) {
+            $secret = base64_decode(Str::after($secret, 'base64:'), true) ?: $secret;
         }
 
         $payload = [
-            'iss' => $apiKey,
-            'sub' => 'gotfit-user-' . $user->id . '-session-' . $session->id,
+            'iss' => config('app.name', 'GotFit'),
+            'sub' => 'gotfit-user-'.$user->id.'-session-'.$session->id,
             'name' => $user->name,
+            'role' => $role,
+            'room' => $session->room_name,
+            'session_id' => $session->id,
             'iat' => $now,
             'nbf' => $now - 10,
             'exp' => $now + (int) config('services.visio.token_ttl', 3600),
-            'video' => [
-                'room' => $session->room_name,
-                'roomJoin' => true,
-                'canPublish' => true,
-                'canSubscribe' => true,
-                'roomAdmin' => $role === 'coach',
+            'permissions' => [
+                'can_join' => true,
+                'can_publish' => true,
+                'can_subscribe' => true,
+                'can_admin' => $role === 'coach',
             ],
-            'metadata' => json_encode([
-                'user_id' => $user->id,
-                'session_id' => $session->id,
-                'role' => $role,
-            ]),
         ];
 
-        return $this->encodeJwt($payload, $apiSecret);
+        return $this->encodeJwt($payload, $secret);
     }
-
-    $secret = config('services.visio.secret') ?: config('app.key');
-
-    if (Str::startsWith($secret, 'base64:')) {
-        $secret = base64_decode(Str::after($secret, 'base64:'), true) ?: $secret;
-    }
-
-    $payload = [
-        'iss' => config('app.name', 'GotFit'),
-        'sub' => 'gotfit-user-' . $user->id . '-session-' . $session->id,
-        'name' => $user->name,
-        'role' => $role,
-        'room' => $session->room_name,
-        'session_id' => $session->id,
-        'iat' => $now,
-        'nbf' => $now - 10,
-        'exp' => $now + (int) config('services.visio.token_ttl', 3600),
-        'permissions' => [
-            'can_join' => true,
-            'can_publish' => true,
-            'can_subscribe' => true,
-            'can_admin' => $role === 'coach',
-        ],
-    ];
-
-    return $this->encodeJwt($payload, $secret);
-}
 
     private function encodeJwt(array $payload, string $secret): string
     {
