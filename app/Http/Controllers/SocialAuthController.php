@@ -10,195 +10,703 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class SocialAuthController extends Controller
 {
     /**
-     * Authentifie un utilisateur à partir d'un jeton Google Identity Services.
+     * Authentifie un utilisateur à partir d'un jeton
+     * Google Identity Services.
      *
-     * Le compte est créé automatiquement lors de la première connexion. Le rôle
-     * demandé n'est appliqué qu'à la création : une reconnexion ne peut donc pas
-     * servir à élever les permissions d'un compte existant.
+     * Le compte est créé automatiquement lors de la première connexion.
+     * Le rôle demandé est appliqué uniquement lors de la création.
      */
     public function google(Request $request): JsonResponse
     {
+        /*
+        |--------------------------------------------------------------------------
+        | Nettoyage du SIRET
+        |--------------------------------------------------------------------------
+        */
+
         if ($request->filled('siret')) {
             $request->merge([
-                'siret' => preg_replace('/\D+/', '', (string) $request->input('siret')),
+                'siret' => preg_replace(
+                    '/\D+/',
+                    '',
+                    (string) $request->input('siret')
+                ),
             ]);
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Validation de la requête
+        |--------------------------------------------------------------------------
+        */
+
         $validated = $request->validate([
-            'credential' => ['required', 'string', 'max:4096'],
-            'role' => ['nullable', Rule::in(['client', 'intervenant'])],
-            'device_name' => ['nullable', 'string', 'max:100'],
-            'siret' => ['nullable', 'digits:14'],
+            'credential' => [
+                'required',
+                'string',
+                'max:4096',
+            ],
+
+            'role' => [
+                'nullable',
+                Rule::in([
+                    'client',
+                    'intervenant',
+                ]),
+            ],
+
+            'device_name' => [
+                'nullable',
+                'string',
+                'max:100',
+            ],
+
+            'siret' => [
+                'nullable',
+                'digits:14',
+            ],
         ]);
 
-        $clientId = (string) config('services.google.client_id');
+        /*
+        |--------------------------------------------------------------------------
+        | Client ID Google configuré dans Laravel
+        |--------------------------------------------------------------------------
+        */
+
+        $configuredClientId = (string) config(
+            'services.google.client_id'
+        );
+
+        /*
+         * Retire les espaces, guillemets et chevrons qui auraient pu
+         * être copiés par erreur dans le fichier .env.
+         */
+        $clientId = trim(
+            $configuredClientId,
+            " \t\n\r\0\x0B\"'<>"
+        );
 
         if ($clientId === '') {
             return response()->json([
-                'message' => 'La connexion Google n’est pas encore configurée sur le serveur.',
+                'message' =>
+                    'La connexion Google n’est pas encore configurée sur le serveur.',
             ], 503);
         }
 
+        if ($configuredClientId !== $clientId) {
+            Log::warning(
+                'Le Client ID Google contenait des caractères parasites.',
+                [
+                    'original_length' => strlen(
+                        $configuredClientId
+                    ),
+
+                    'normalized_length' => strlen(
+                        $clientId
+                    ),
+                ]
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Vérification du jeton auprès de Google
+        |--------------------------------------------------------------------------
+        */
+
         try {
             $googleResponse = Http::acceptJson()
-                ->timeout(8)
-                ->retry(1, 200)
-                ->get('https://oauth2.googleapis.com/tokeninfo', [
-                    'id_token' => $validated['credential'],
-                ]);
-        } catch (ConnectionException) {
+                ->connectTimeout(5)
+                ->timeout(10)
+                ->retry(
+                    2,
+                    200,
+                    null,
+                    false
+                )
+                ->get(
+                    'https://oauth2.googleapis.com/tokeninfo',
+                    [
+                        'id_token' =>
+                            $validated['credential'],
+                    ]
+                );
+        } catch (ConnectionException $exception) {
+            Log::warning(
+                'Google tokeninfo est inaccessible.',
+                [
+                    'exception' => get_class(
+                        $exception
+                    ),
+
+                    'message' =>
+                        $exception->getMessage(),
+                ]
+            );
+
             return response()->json([
-                'message' => 'Google est momentanément indisponible. Veuillez réessayer.',
+                'message' =>
+                    'Google est momentanément indisponible. Veuillez réessayer.',
             ], 503);
         }
 
         if ($googleResponse->failed()) {
+            Log::warning(
+                'Google a refusé le jeton d’identité.',
+                [
+                    'status' =>
+                        $googleResponse->status(),
+                ]
+            );
+
             return response()->json([
-                'message' => 'Le jeton Google est invalide ou a expiré.',
+                'message' =>
+                    'Le jeton Google est invalide ou a expiré.',
             ], 401);
         }
 
         $identity = $googleResponse->json();
-        $issuer = $identity['iss'] ?? null;
+
+        if (! is_array($identity)) {
+            Log::warning(
+                'La réponse Google tokeninfo est incorrecte.',
+                [
+                    'status' =>
+                        $googleResponse->status(),
+                ]
+            );
+
+            return response()->json([
+                'message' =>
+                    'La réponse reçue de Google est invalide.',
+            ], 502);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Normalisation des informations Google
+        |--------------------------------------------------------------------------
+        */
+
+        $googleId = trim(
+            (string) ($identity['sub'] ?? '')
+        );
+
+        $email = Str::lower(
+            trim(
+                (string) ($identity['email'] ?? '')
+            )
+        );
+
+        $issuer = trim(
+            (string) ($identity['iss'] ?? '')
+        );
+
+        $expiration = (int) (
+            $identity['exp'] ?? 0
+        );
+
         $emailVerified = filter_var(
             $identity['email_verified'] ?? false,
             FILTER_VALIDATE_BOOLEAN
         );
 
-        $isTrustedIdentity =
-            isset($identity['sub'], $identity['email'], $identity['exp']) &&
-            hash_equals($clientId, (string) ($identity['aud'] ?? '')) &&
-            in_array($issuer, ['accounts.google.com', 'https://accounts.google.com'], true) &&
-            (int) $identity['exp'] > now()->timestamp &&
-            $emailVerified;
+        /*
+         * Le champ aud est normalement une chaîne.
+         * Cette partie accepte aussi un tableau pour rester robuste.
+         */
+        $audienceClaim = $identity['aud'] ?? '';
 
-        if (! $isTrustedIdentity) {
+        if (is_array($audienceClaim)) {
+            $audiences = array_values(
+                array_filter(
+                    array_map(
+                        static fn ($audience): string =>
+                            trim((string) $audience),
+                        $audienceClaim
+                    ),
+                    static fn (string $audience): bool =>
+                        $audience !== ''
+                )
+            );
+        } else {
+            $audience = trim(
+                (string) $audienceClaim
+            );
+
+            $audiences = $audience !== ''
+                ? [$audience]
+                : [];
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Vérifications de sécurité
+        |--------------------------------------------------------------------------
+        */
+
+        $hasRequiredClaims =
+            $googleId !== ''
+            && $email !== ''
+            && filter_var(
+                $email,
+                FILTER_VALIDATE_EMAIL
+            ) !== false
+            && $expiration > 0;
+
+        $audienceValid = false;
+
+        foreach ($audiences as $audience) {
+            if (
+                $audience !== ''
+                && hash_equals(
+                    $clientId,
+                    $audience
+                )
+            ) {
+                $audienceValid = true;
+
+                break;
+            }
+        }
+
+        $issuerValid = in_array(
+            $issuer,
+            [
+                'accounts.google.com',
+                'https://accounts.google.com',
+            ],
+            true
+        );
+
+        $serverTimestamp = now()->timestamp;
+
+        $expirationValid =
+            $expiration > $serverTimestamp;
+
+        /*
+        |--------------------------------------------------------------------------
+        | Journal sécurisé en cas d’échec
+        |--------------------------------------------------------------------------
+        |
+        | Le jeton Google, l’adresse e-mail et le Client ID complet
+        | ne sont jamais enregistrés dans les logs.
+        |
+        */
+
+        if (
+            ! $hasRequiredClaims
+            || ! $audienceValid
+            || ! $issuerValid
+            || ! $expirationValid
+            || ! $emailVerified
+        ) {
+            Log::warning(
+                'Échec vérification identité Google.',
+                [
+                    'has_required_claims' =>
+                        $hasRequiredClaims,
+
+                    'audience_valid' =>
+                        $audienceValid,
+
+                    'issuer_valid' =>
+                        $issuerValid,
+
+                    'expiration_valid' =>
+                        $expirationValid,
+
+                    'email_verified' =>
+                        $emailVerified,
+
+                    'issuer' =>
+                        $issuer,
+
+                    'expiration' =>
+                        $expiration,
+
+                    'server_timestamp' =>
+                        $serverTimestamp,
+
+                    'expected_audience_length' =>
+                        strlen($clientId),
+
+                    'received_audience_lengths' =>
+                        array_map(
+                            static fn (
+                                string $audience
+                            ): int =>
+                                strlen($audience),
+                            $audiences
+                        ),
+
+                    'expected_audience_hash' =>
+                        substr(
+                            hash(
+                                'sha256',
+                                $clientId
+                            ),
+                            0,
+                            16
+                        ),
+
+                    'received_audience_hashes' =>
+                        array_map(
+                            static fn (
+                                string $audience
+                            ): string =>
+                                substr(
+                                    hash(
+                                        'sha256',
+                                        $audience
+                                    ),
+                                    0,
+                                    16
+                                ),
+                            $audiences
+                        ),
+                ]
+            );
+        }
+
+        if (
+            ! $hasRequiredClaims
+            || ! $audienceValid
+            || ! $issuerValid
+            || ! $expirationValid
+        ) {
             return response()->json([
-                'message' => 'Cette identité Google ne peut pas être vérifiée pour Gotfit.',
+                'message' =>
+                    'Cette identité Google ne peut pas être vérifiée pour Gotfit.',
             ], 401);
         }
 
-        $googleId = (string) $identity['sub'];
-        $email = Str::lower(trim((string) $identity['email']));
-        $roleSlug = $validated['role'] ?? 'client';
+        if (! $emailVerified) {
+            return response()->json([
+                'message' =>
+                    'Votre adresse e-mail Google doit être vérifiée avant de continuer.',
+            ], 403);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Rôle demandé
+        |--------------------------------------------------------------------------
+        */
+
+        $roleSlug =
+            $validated['role'] ?? 'client';
+
         $isNewUser = false;
+
+        /*
+        |--------------------------------------------------------------------------
+        | Vérification du SIRET
+        |--------------------------------------------------------------------------
+        */
 
         if (
             isset($validated['siret'])
-            && User::where('siret', $validated['siret'])
-                ->where('email', '!=', $email)
-                ->where(function ($query) use ($googleId) {
-                    $query->whereNull('google_id')
-                        ->orWhere('google_id', '!=', $googleId);
-                })
+            && User::where(
+                'siret',
+                $validated['siret']
+            )
+                ->where(
+                    'email',
+                    '!=',
+                    $email
+                )
+                ->where(
+                    function ($query) use (
+                        $googleId
+                    ) {
+                        $query
+                            ->whereNull(
+                                'google_id'
+                            )
+                            ->orWhere(
+                                'google_id',
+                                '!=',
+                                $googleId
+                            );
+                    }
+                )
                 ->exists()
         ) {
             return response()->json([
-                'message' => 'Ce numéro de SIRET est déjà utilisé.',
+                'message' =>
+                    'Ce numéro de SIRET est déjà utilisé.',
+
                 'errors' => [
-                    'siret' => ['Ce numéro de SIRET est déjà utilisé.'],
+                    'siret' => [
+                        'Ce numéro de SIRET est déjà utilisé.',
+                    ],
                 ],
             ], 422);
         }
 
-        $user = DB::transaction(function () use (
-            $email,
-            $googleId,
-            $identity,
-            $roleSlug,
-            $validated,
-            &$isNewUser
-        ) {
-            $user = User::query()
-                ->where('google_id', $googleId)
-                ->orWhere('email', $email)
-                ->lockForUpdate()
-                ->first();
+        /*
+        |--------------------------------------------------------------------------
+        | Création ou mise à jour du compte
+        |--------------------------------------------------------------------------
+        */
 
-            if ($user && $user->google_id && ! hash_equals($user->google_id, $googleId)) {
-                abort(409, 'Cette adresse email est déjà liée à un autre compte Google.');
-            }
-
-            if (! $user) {
-                $isNewUser = true;
-                $user = User::create([
-                    'name' => trim((string) ($identity['name'] ?? 'Utilisateur Gotfit')),
-                    'email' => $email,
-                    'password' => Hash::make(Str::random(64)),
-                    'google_id' => $googleId,
-                    'auth_provider' => 'google',
-                    'google_avatar_url' => $identity['picture'] ?? null,
-                    'email_verified_at' => now(),
-                    'last_login_at' => now(),
-                    'account_status' => $roleSlug === 'intervenant' ? 'pending' : 'approved',
-                    'siret' => $roleSlug === 'intervenant'
-                        ? ($validated['siret'] ?? null)
-                        : null,
-                ]);
-
-                $role = Role::firstOrCreate(
-                    ['slug' => $roleSlug],
-                    [
-                        'name' => $roleSlug === 'intervenant' ? 'Intervenant' : 'Client',
-                        'description' => null,
-                        'is_active' => true,
-                    ]
-                );
-
-                $user->roles()->syncWithoutDetaching([$role->id]);
-            } else {
-                $updates = [
-                    'google_id' => $user->google_id ?: $googleId,
-                    'auth_provider' => 'google',
-                    'google_avatar_url' => $identity['picture'] ?? $user->google_avatar_url,
-                    'email_verified_at' => $user->email_verified_at ?: now(),
-                    'last_login_at' => now(),
-                ];
+        $user = DB::transaction(
+            function () use (
+                $email,
+                $googleId,
+                $identity,
+                $roleSlug,
+                $validated,
+                &$isNewUser
+            ) {
+                $user = User::query()
+                    ->where(
+                        'google_id',
+                        $googleId
+                    )
+                    ->orWhere(
+                        'email',
+                        $email
+                    )
+                    ->lockForUpdate()
+                    ->first();
 
                 if (
-                    isset($validated['siret'])
-                    && $user->hasRole('intervenant')
-                    && ! $user->siret
+                    $user
+                    && $user->google_id
+                    && ! hash_equals(
+                        (string) $user->google_id,
+                        $googleId
+                    )
                 ) {
-                    $updates['siret'] = $validated['siret'];
+                    abort(
+                        409,
+                        'Cette adresse email est déjà liée à un autre compte Google.'
+                    );
                 }
 
-                $user->forceFill($updates)->save();
-            }
+                /*
+                 * Création du compte.
+                 */
+                if (! $user) {
+                    $isNewUser = true;
 
-            return $user;
-        });
+                    $name = trim(
+                        (string) (
+                            $identity['name']
+                            ?? 'Utilisateur Gotfit'
+                        )
+                    );
+
+                    if ($name === '') {
+                        $name =
+                            'Utilisateur Gotfit';
+                    }
+
+                    $user = User::create([
+                        'name' =>
+                            $name,
+
+                        'email' =>
+                            $email,
+
+                        'password' =>
+                            Hash::make(
+                                Str::random(64)
+                            ),
+
+                        'google_id' =>
+                            $googleId,
+
+                        'auth_provider' =>
+                            'google',
+
+                        'google_avatar_url' =>
+                            isset(
+                                $identity['picture']
+                            )
+                                ? (string) $identity['picture']
+                                : null,
+
+                        'email_verified_at' =>
+                            now(),
+
+                        'last_login_at' =>
+                            now(),
+
+                        'account_status' =>
+                            $roleSlug ===
+                            'intervenant'
+                                ? 'pending'
+                                : 'approved',
+
+                        'siret' =>
+                            $roleSlug ===
+                            'intervenant'
+                                ? (
+                                    $validated['siret']
+                                    ?? null
+                                )
+                                : null,
+                    ]);
+
+                    $role = Role::firstOrCreate(
+                        [
+                            'slug' =>
+                                $roleSlug,
+                        ],
+                        [
+                            'name' =>
+                                $roleSlug ===
+                                'intervenant'
+                                    ? 'Intervenant'
+                                    : 'Client',
+
+                            'description' =>
+                                null,
+
+                            'is_active' =>
+                                true,
+                        ]
+                    );
+
+                    $user
+                        ->roles()
+                        ->syncWithoutDetaching([
+                            $role->id,
+                        ]);
+                } else {
+                    /*
+                     * Mise à jour d’un compte existant.
+                     */
+                    $updates = [
+                        'google_id' =>
+                            $user->google_id
+                                ?: $googleId,
+
+                        'auth_provider' =>
+                            'google',
+
+                        'google_avatar_url' =>
+                            isset(
+                                $identity['picture']
+                            )
+                                ? (string) $identity['picture']
+                                : $user->google_avatar_url,
+
+                        'email_verified_at' =>
+                            $user->email_verified_at
+                                ?: now(),
+
+                        'last_login_at' =>
+                            now(),
+                    ];
+
+                    if (
+                        isset($validated['siret'])
+                        && $user->hasRole(
+                            'intervenant'
+                        )
+                        && ! $user->siret
+                    ) {
+                        $updates['siret'] =
+                            $validated['siret'];
+                    }
+
+                    $user
+                        ->forceFill($updates)
+                        ->save();
+                }
+
+                return $user;
+            }
+        );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Création du token Sanctum
+        |--------------------------------------------------------------------------
+        */
 
         $token = $user
-            ->createToken($validated['device_name'] ?? 'gotfit-webapp')
+            ->createToken(
+                $validated['device_name']
+                    ?? 'gotfit-webapp'
+            )
             ->plainTextToken;
 
         $user->load('roles');
-        $hasProfessionalDocument = $user->documents()
-            ->whereIn('document_type', ['diploma', 'certification'])
+
+        /*
+        |--------------------------------------------------------------------------
+        | Vérification du profil professionnel
+        |--------------------------------------------------------------------------
+        */
+
+        $hasProfessionalDocument = $user
+            ->documents()
+            ->whereIn(
+                'document_type',
+                [
+                    'diploma',
+                    'certification',
+                ]
+            )
             ->exists();
-        $requiresProfessionalCompletion = $user->hasRole('intervenant')
-            && (! $user->siret || ! $hasProfessionalDocument);
+
+        $requiresProfessionalCompletion =
+            $user->hasRole('intervenant')
+            && (
+                ! $user->siret
+                || ! $hasProfessionalDocument
+            );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Réponse finale
+        |--------------------------------------------------------------------------
+        */
 
         return response()->json([
             'message' => $isNewUser
                 ? 'Votre compte Gotfit a été créé avec Google.'
                 : 'Connexion Google réussie.',
-            'is_new_user' => $isNewUser,
-            'token' => $token,
-            'user' => $user->fresh()->load('roles'),
+
+            'is_new_user' =>
+                $isNewUser,
+
+            'token' =>
+                $token,
+
+            'user' =>
+                $user
+                    ->fresh()
+                    ->load('roles'),
+
             'professional_profile' => [
-                'requires_completion' => $requiresProfessionalCompletion,
-                'missing_fields' => array_values(array_filter([
-                    ! $user->siret ? 'siret' : null,
-                    ! $hasProfessionalDocument ? 'diploma_or_certification' : null,
-                ])),
+                'requires_completion' =>
+                    $requiresProfessionalCompletion,
+
+                'missing_fields' =>
+                    array_values(
+                        array_filter([
+                            ! $user->siret
+                                ? 'siret'
+                                : null,
+
+                            ! $hasProfessionalDocument
+                                ? 'diploma_or_certification'
+                                : null,
+                        ])
+                    ),
             ],
         ], $isNewUser ? 201 : 200);
     }
