@@ -14,7 +14,7 @@ class ClientJourneyController extends Controller
     {
         $client = User::with('roles')->findOrFail($clientId);
 
-        if (!$this->canAccessClient($request->user(), $client)) {
+        if (! $this->canAccessClient($request->user(), $client)) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -58,7 +58,7 @@ class ClientJourneyController extends Controller
     {
         $client = User::findOrFail($clientId);
 
-        if (!$this->canAccessClient($request->user(), $client)) {
+        if (! $this->canAccessClient($request->user(), $client)) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -94,11 +94,12 @@ class ClientJourneyController extends Controller
         $client = User::findOrFail($clientId);
         $user = $request->user();
 
-        if (!$this->canAccessClient($user, $client)) {
+        if (! $this->canAccessClient($user, $client)) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
         $data = $request->validate([
+            'intervenant_id' => ['nullable', 'integer', 'exists:users,id'],
             'reservation_id' => ['nullable', 'integer', 'exists:reservations,id'],
             'visibility' => ['nullable', 'in:private,shared'],
             'title' => ['nullable', 'string', 'max:255'],
@@ -107,7 +108,7 @@ class ClientJourneyController extends Controller
         ]);
 
         $reservation = null;
-        if (!empty($data['reservation_id'])) {
+        if (! empty($data['reservation_id'])) {
             $reservation = Reservation::findOrFail($data['reservation_id']);
 
             if ((int) $reservation->client_id !== (int) $client->id) {
@@ -119,8 +120,37 @@ class ClientJourneyController extends Controller
             }
         }
 
-        $intervenantId = $reservation?->intervenant_id;
-        if (!$intervenantId && $user->hasRole('intervenant')) {
+        $intervenantId = ! empty($data['intervenant_id'])
+            ? (int) $data['intervenant_id']
+            : $reservation?->intervenant_id;
+
+        if ($intervenantId) {
+            $intervenant = User::whereKey($intervenantId)
+                ->whereHas('roles', fn ($query) => $query->where('slug', 'intervenant'))
+                ->first();
+
+            if (! $intervenant) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'L’intervenant sélectionné n’est pas un coach valide.',
+                    'errors' => ['intervenant_id' => ['Sélectionnez un intervenant coach valide.']],
+                ], 422);
+            }
+
+            if ($user->hasRole('intervenant') && (int) $user->id !== $intervenantId) {
+                return response()->json(['status' => 403, 'message' => 'Un intervenant ne peut assigner une note qu’à lui-même.'], 403);
+            }
+
+            if ($reservation && (int) $reservation->intervenant_id !== $intervenantId) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Le coach assigné doit correspondre au coach de la réservation.',
+                    'errors' => ['intervenant_id' => ['Ce coach ne correspond pas à la réservation sélectionnée.']],
+                ], 422);
+            }
+        }
+
+        if (! $intervenantId && $user->hasRole('intervenant')) {
             $intervenantId = $user->id;
         }
 
@@ -149,16 +179,36 @@ class ClientJourneyController extends Controller
         $note = ClientNote::findOrFail($noteId);
         $user = $request->user();
 
-        if (!$user->hasRole('admin') && (int) $note->author_id !== (int) $user->id) {
+        if (! $user->hasRole('admin') && (int) $note->author_id !== (int) $user->id) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
         $data = $request->validate([
+            'intervenant_id' => ['nullable', 'integer', 'exists:users,id'],
             'visibility' => ['nullable', 'in:private,shared'],
             'title' => ['nullable', 'string', 'max:255'],
             'content' => ['nullable', 'string', 'max:5000'],
             'is_pinned' => ['nullable', 'boolean'],
         ]);
+
+        if (array_key_exists('intervenant_id', $data) && $data['intervenant_id'] !== null) {
+            $intervenantId = (int) $data['intervenant_id'];
+            $isCoach = User::whereKey($intervenantId)
+                ->whereHas('roles', fn ($query) => $query->where('slug', 'intervenant'))
+                ->exists();
+
+            if (! $isCoach) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'L’intervenant sélectionné n’est pas un coach valide.',
+                    'errors' => ['intervenant_id' => ['Sélectionnez un intervenant coach valide.']],
+                ], 422);
+            }
+
+            if ($user->hasRole('intervenant') && (int) $user->id !== $intervenantId) {
+                return response()->json(['status' => 403, 'message' => 'Un intervenant ne peut assigner une note qu’à lui-même.'], 403);
+            }
+        }
 
         $note->update($data);
         $note->load(['author:id,name,email', 'intervenant:id,name,email', 'reservation:id,reservation_date,reservation_time,status']);
@@ -175,7 +225,7 @@ class ClientJourneyController extends Controller
         $note = ClientNote::findOrFail($noteId);
         $user = $request->user();
 
-        if (!$user->hasRole('admin') && (int) $note->author_id !== (int) $user->id) {
+        if (! $user->hasRole('admin') && (int) $note->author_id !== (int) $user->id) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -188,7 +238,7 @@ class ClientJourneyController extends Controller
     {
         $client = User::findOrFail($clientId);
 
-        if (!$this->canAccessClient($request->user(), $client)) {
+        if (! $this->canAccessClient($request->user(), $client)) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -201,7 +251,7 @@ class ClientJourneyController extends Controller
 
     public function myOnboarding(Request $request)
     {
-        if (!$request->user()->hasRole('client')) {
+        if (! $request->user()->hasRole('client')) {
             return response()->json(['status' => 403, 'message' => 'Accès réservé aux clients'], 403);
         }
 
@@ -210,7 +260,7 @@ class ClientJourneyController extends Controller
 
     public function saveMyOnboarding(Request $request)
     {
-        if (!$request->user()->hasRole('client')) {
+        if (! $request->user()->hasRole('client')) {
             return response()->json(['status' => 403, 'message' => 'Accès réservé aux clients'], 403);
         }
 

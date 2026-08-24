@@ -255,6 +255,19 @@ Route::middleware('auth:sanctum')->group(function () {
 
     /*
     |--------------------------------------------------------------------------
+    | ANNONCES UTILISATEUR
+    |--------------------------------------------------------------------------
+    | Les coachs publient des prestations et les clients des recherches de
+    | coach. Le contrôleur détermine le type à partir du rôle authentifié.
+    |--------------------------------------------------------------------------
+    */
+
+    Route::post('/annonces', [AnnonceController::class, 'store']);
+    Route::put('/annonces/{id}', [AnnonceController::class, 'update'])->whereNumber('id');
+    Route::delete('/annonces/{id}', [AnnonceController::class, 'destroy'])->whereNumber('id');
+
+    /*
+    |--------------------------------------------------------------------------
     | PARCOURS CLIENT / COACH
     |--------------------------------------------------------------------------
     */
@@ -396,8 +409,6 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
     Route::get('/getAllAnnonce', [AnnonceController::class, 'getAllAnnonce']);
     Route::put('/annonces/{id}/valide', [AnnonceController::class, 'validerAnnonce'])->whereNumber('id');
     Route::put('/annonces/{id}/refuser', [AnnonceController::class, 'refuserAnnonce'])->whereNumber('id');
-    Route::delete('/annonces/{id}', [AnnonceController::class, 'destroy'])->whereNumber('id');
-
     /*
     |--------------------------------------------------------------------------
     | DOCUMENTS ADMIN
@@ -469,8 +480,6 @@ Route::middleware(['auth:sanctum', 'is_intervenant'])->group(function () {
     Route::post('/coach/credentials', [DocumentController::class, 'storeCredential']);
     Route::delete('/coach/credentials/{id}', [DocumentController::class, 'destroy'])->whereNumber('id');
 
-    Route::post('/annonces', [AnnonceController::class, 'store']);
-    Route::put('/annonces/{id}', [AnnonceController::class, 'update'])->whereNumber('id');
     Route::post('/annonces/{id}/boost', [AnnonceController::class, 'boost'])->whereNumber('id');
 
     Route::get('/reservation/intervenant', [ReservationController::class, 'getReservationByIntervenant']);

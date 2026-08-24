@@ -10,10 +10,10 @@ class Annonce extends Model
     use HasFactory;
 
     protected $fillable = [
-        'titre', 'contenu', 'user_id', 'status', 'reserved_by',
+        'titre', 'contenu', 'user_id', 'status', 'announcement_type', 'reserved_by',
         'category', 'type_prestation', 'price', 'duration', 'is_online',
         'location', 'city', 'address', 'latitude', 'longitude',
-        'available_days', 'available_hours', 'image', 'is_boosted', 'boost_until'
+        'available_days', 'available_hours', 'image', 'is_boosted', 'boost_until',
     ];
 
     protected $casts = [

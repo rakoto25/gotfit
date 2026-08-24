@@ -70,7 +70,14 @@ class AnnonceController extends Controller
     {
         $user = Auth::user();
 
-        if ($user->account_status !== 'approved') {
+        if (! $user->hasRole('client') && ! $user->hasRole('intervenant')) {
+            return response()->json([
+                'status' => 403,
+                'message' => 'Seuls les clients et les intervenants peuvent publier une annonce.',
+            ], 403);
+        }
+
+        if ($user->hasRole('intervenant') && $user->account_status !== 'approved') {
             return response()->json([
                 'status' => 403,
                 'message' => 'Votre profil doit être validé par l’administration avant de publier une annonce.',
@@ -80,6 +87,9 @@ class AnnonceController extends Controller
         $data = $this->validateAnnonce($request);
         $data['user_id'] = $user->id;
         $data['status'] = 'en_attente';
+        $data['announcement_type'] = $user->hasRole('client')
+            ? 'client_request'
+            : 'coach_service';
 
         if ($request->hasFile('image')) {
             $data['image'] = $request->file('image')->store('annonces', 'public');
@@ -105,6 +115,8 @@ class AnnonceController extends Controller
 
         $data = $this->validateAnnonce($request, false);
         $data['status'] = 'en_attente';
+        $data['announcement_type'] = $annonce->announcement_type
+            ?: ($user->hasRole('client') ? 'client_request' : 'coach_service');
 
         if ($request->hasFile('image')) {
             if ($annonce->image && Storage::disk('public')->exists($annonce->image)) {
@@ -188,6 +200,13 @@ class AnnonceController extends Controller
         }
 
         $annonce = Annonce::findOrFail($id);
+
+        if ($annonce->announcement_type === 'client_request') {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Cette annonce est une recherche de coach. Contactez le client depuis la messagerie pour lui proposer votre accompagnement.',
+            ], 422);
+        }
 
         if ($annonce->status !== 'valide') {
             return response()->json(['status' => 400, 'message' => 'Cette annonce n’est pas encore disponible à la réservation'], 400);
