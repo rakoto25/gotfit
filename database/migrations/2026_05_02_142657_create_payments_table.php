@@ -17,8 +17,8 @@ return new class extends Migration
             $table->double('amount');
             $table->double('commission');
             $table->double('intervenant_amount');
-            $table->foreignId('intervenant_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('client_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('intervenant_id')->constrained('users')->cascadeOnDelete();
+            $table->foreignId('client_id')->constrained('users')->cascadeOnDelete();
             $table->string('status');
             $table->timestamps();
         });

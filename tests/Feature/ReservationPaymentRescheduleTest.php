@@ -2,7 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Http\Controllers\PayementController;
 use App\Models\Annonce;
+use App\Models\Payement;
 use App\Models\Reservation;
 use App\Models\Role;
 use App\Models\User;
@@ -11,7 +13,10 @@ use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
+use ReflectionMethod;
+use Stripe\PaymentIntent;
 use Tests\TestCase;
 
 class ReservationPaymentRescheduleTest extends TestCase
@@ -108,6 +113,77 @@ class ReservationPaymentRescheduleTest extends TestCase
         ])->assertForbidden();
 
         $this->assertDatabaseCount('reservation_reschedule_histories', 0);
+    }
+
+    public function test_stripe_cents_are_saved_as_euros_and_reconciliation_is_idempotent(): void
+    {
+        Notification::fake();
+        Queue::fake();
+
+        [$client, $coach, $annonce] = $this->marketplaceUsers();
+        $reservation = $this->reservation($client, $coach, $annonce, [
+            'price' => 60,
+            'service_fee_amount' => 3,
+            'commission_amount' => 7.2,
+            'intervenant_amount' => 52.8,
+            'total_client_amount' => 63,
+            'payment_intent_id' => 'pi_6300_test',
+        ]);
+        $intent = PaymentIntent::constructFrom([
+            'id' => 'pi_6300_test',
+            'client_secret' => 'pi_6300_test_secret',
+            'amount' => 6300,
+            'amount_received' => 6300,
+            'currency' => 'eur',
+            'status' => 'succeeded',
+            'latest_charge' => 'ch_6300_test',
+            'metadata' => [
+                'reservation_id' => (string) $reservation->id,
+                'client_id' => (string) $client->id,
+            ],
+        ]);
+        $controller = app(PayementController::class);
+        $amountMethod = new ReflectionMethod($controller, 'amountInCents');
+        $amountMethod->setAccessible(true);
+        $reconcileMethod = new ReflectionMethod($controller, 'completeSuccessfulPayment');
+        $reconcileMethod->setAccessible(true);
+
+        $this->assertSame(6300, $amountMethod->invoke($controller, $reservation));
+        $reconcileMethod->invoke($controller, $reservation, $intent);
+
+        $this->assertDatabaseHas('reservations', [
+            'id' => $reservation->id,
+            'is_paid' => true,
+            'payment_status' => 'paid',
+            'prestation_status' => 'paid',
+        ]);
+        $this->assertDatabaseHas('payments', [
+            'payment_intent_id' => 'pi_6300_test',
+            'amount' => 63,
+            'status' => 'paid',
+        ]);
+
+        $reservation->refresh()->update([
+            'prestation_status' => 'validated',
+            'payout_status' => 'transferred',
+        ]);
+        Payement::where('payment_intent_id', 'pi_6300_test')->update([
+            'status' => 'transferred',
+            'payout_status' => 'transferred',
+        ]);
+
+        $reconcileMethod->invoke($controller, $reservation->fresh(), $intent);
+
+        $this->assertDatabaseHas('reservations', [
+            'id' => $reservation->id,
+            'prestation_status' => 'validated',
+            'payout_status' => 'transferred',
+        ]);
+        $this->assertDatabaseHas('payments', [
+            'payment_intent_id' => 'pi_6300_test',
+            'status' => 'transferred',
+            'payout_status' => 'transferred',
+        ]);
     }
 
     private function marketplaceUsers(): array

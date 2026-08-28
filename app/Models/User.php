@@ -203,6 +203,11 @@ class User extends Authenticatable
         return $this->hasMany(ClientNote::class, 'author_id');
     }
 
+    public function coachForumPosts(): HasMany
+    {
+        return $this->hasMany(CoachForumPost::class);
+    }
+
     public function clientOnboarding()
     {
         return $this->hasOne(ClientOnboarding::class, 'client_id');

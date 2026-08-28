@@ -127,10 +127,12 @@ class VisioSessionController extends Controller
             'duration_minutes' => $data['duration_minutes'] ?? 60,
             'min_participants' => $minParticipants,
             'max_participants' => $maxParticipants,
-            'price' => $data['price'] ?? 0,
-            'currency' => strtoupper($data['currency'] ?? 'EUR'),
+            // Les séances créées directement dans l’espace Visio sont gratuites.
+            // Les séances payantes passent par Annonce -> Réservation -> Stripe.
+            'price' => 0,
+            'currency' => 'EUR',
             'status' => $data['status'] ?? 'open',
-            'provider' => $data['provider'] ?? config('services.visio.provider', 'gotfit'),
+            'provider' => 'livekit',
             'provider_room_id' => $data['provider_room_id'] ?? null,
             'room_name' => $this->makeRoomName($data['title']),
             'join_url' => $data['join_url'] ?? null,
@@ -213,7 +215,14 @@ class VisioSessionController extends Controller
         $data['min_participants'] = $minParticipants;
         $data['max_participants'] = $maxParticipants;
 
-        if (isset($data['currency'])) {
+        // Les visios autonomes restent gratuites ; les paiements sont centralisés
+        // sur le parcours marketplace qui crée une réservation Stripe traçable.
+        $data['provider'] = 'livekit';
+
+        if (! $session->reservation_id) {
+            $data['price'] = 0;
+            $data['currency'] = 'EUR';
+        } elseif (isset($data['currency'])) {
             $data['currency'] = strtoupper($data['currency']);
         }
 
@@ -395,6 +404,24 @@ class VisioSessionController extends Controller
             return response()->json(['status' => 422, 'message' => 'Cette séance ne peut plus démarrer.'], 422);
         }
 
+        $opensAt = $session->start_at->copy()->subMinutes(15);
+        $closesAt = $session->start_at->copy()->addMinutes($session->duration_minutes)->addMinutes(30);
+
+        if (now()->lt($opensAt)) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'La salle pourra être démarrée 15 minutes avant la séance.',
+                'available_at' => $opensAt->toIso8601String(),
+            ], 422);
+        }
+
+        if (now()->gt($closesAt)) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'La période de démarrage de cette séance est terminée.',
+            ], 422);
+        }
+
         $session->update([
             'status' => 'live',
             'started_at' => $session->started_at ?? now(),
@@ -463,13 +490,21 @@ class VisioSessionController extends Controller
             ]);
         }
 
+        $serverUrl = trim((string) config('services.visio.server_url'));
+        if ($serverUrl === '' || ! preg_match('/^wss?:\/\//i', $serverUrl)) {
+            return response()->json([
+                'status' => 503,
+                'message' => 'La visioconférence est temporairement indisponible : VISIO_SERVER_URL LiveKit est manquante ou invalide.',
+            ], 503);
+        }
+
         $token = $this->makeVideoToken($session, $user, $participant?->role ?? 'coach');
 
         return response()->json([
             'status' => 200,
             'message' => 'Accès visio autorisé',
             'provider' => $session->provider,
-            'server_url' => config('services.visio.server_url'),
+            'server_url' => $serverUrl,
             'room_name' => $session->room_name,
             'join_url' => $session->join_url,
             'token' => $token,

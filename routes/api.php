@@ -4,6 +4,7 @@ use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminMessageController;
 use App\Http\Controllers\AnnonceController;
 use App\Http\Controllers\ClientJourneyController;
+use App\Http\Controllers\CoachForumController;
 use App\Http\Controllers\ConnexionController;
 use App\Http\Controllers\ContactController;
 use App\Http\Controllers\DocumentController;
@@ -476,6 +477,12 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
 */
 
 Route::middleware(['auth:sanctum', 'is_intervenant'])->group(function () {
+    Route::get('/coach/forum', [CoachForumController::class, 'index']);
+    Route::post('/coach/forum', [CoachForumController::class, 'store'])
+        ->middleware('throttle:20,1');
+    Route::delete('/coach/forum/{post}', [CoachForumController::class, 'destroy'])
+        ->whereNumber('post');
+
     Route::get('/coach/credentials', [DocumentController::class, 'myCredentials']);
     Route::post('/coach/credentials', [DocumentController::class, 'storeCredential']);
     Route::delete('/coach/credentials/{id}', [DocumentController::class, 'destroy'])->whereNumber('id');

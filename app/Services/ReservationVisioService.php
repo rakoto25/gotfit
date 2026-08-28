@@ -6,7 +6,6 @@ use App\Models\Reservation;
 use App\Models\VisioParticipant;
 use App\Models\VisioSession;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 class ReservationVisioService
 {
@@ -14,7 +13,7 @@ class ReservationVisioService
     {
         $reservation->loadMissing(['annonce', 'client', 'intervenant']);
 
-        if (!$this->isPaid($reservation) || !$this->isOnline($reservation)) {
+        if (!$this->isPaid($reservation)) {
             return null;
         }
 
@@ -39,7 +38,7 @@ class ReservationVisioService
                     'price' => 0,
                     'currency' => strtoupper($reservation->currency ?: 'EUR'),
                     'status' => 'confirmed',
-                    'provider' => config('services.visio.provider', 'livekit'),
+                    'provider' => 'livekit',
                     'room_name' => $this->uniqueRoomName($reservation),
                 ]);
 
@@ -50,6 +49,7 @@ class ReservationVisioService
                     'annonce_id' => $reservation->annonce_id,
                     'coach_id' => $reservation->intervenant_id,
                     'session_type' => 'individual',
+                    'provider' => 'livekit',
                     'start_at' => $reservation->scheduledAt(),
                     'duration_minutes' => max((int) ($reservation->annonce?->duration ?: 60), 15),
                     'min_participants' => 1,
@@ -112,14 +112,6 @@ class ReservationVisioService
     private function isPaid(Reservation $reservation): bool
     {
         return (bool) $reservation->is_paid || $reservation->payment_status === 'paid';
-    }
-
-    private function isOnline(Reservation $reservation): bool
-    {
-        $type = Str::lower((string) $reservation->annonce?->type_prestation);
-
-        return (bool) $reservation->annonce?->is_online
-            || in_array($type, ['online', 'en_ligne', 'en ligne', 'visio', 'distance'], true);
     }
 
     private function uniqueRoomName(Reservation $reservation): string

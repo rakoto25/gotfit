@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Jobs\SendExpoPushNotification;
 use App\Models\Payement;
 use App\Models\Reservation;
+use App\Models\VisioParticipant;
 use App\Notifications\ReservationStatusNotification;
 use App\Services\ReservationVisioService;
 use Illuminate\Http\Request;
@@ -59,13 +60,23 @@ class PayementController extends Controller
 
     public function createPaymentIntent(Request $request)
     {
-        Stripe::setApiKey(config('services.stripe.secret'));
+        $stripeSecret = config('services.stripe.secret');
+
+        if (! is_string($stripeSecret) || trim($stripeSecret) === '') {
+            return response()->json([
+                'status' => 503,
+                'message' => 'Le paiement Stripe n’est pas configuré sur le serveur.',
+            ], 503);
+        }
+
+        Stripe::setApiKey($stripeSecret);
 
         $request->validate([
             'reservation_id' => 'required|exists:reservations,id',
         ]);
 
-        $reservation = Reservation::with(['annonce', 'intervenant'])->findOrFail($request->reservation_id);
+        $reservation = Reservation::with(['annonce', 'intervenant', 'visioSession'])
+            ->findOrFail($request->reservation_id);
 
         if ((int) $reservation->client_id !== (int) auth()->id()) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
@@ -86,38 +97,88 @@ class PayementController extends Controller
             return response()->json(['status' => 400, 'message' => 'Cette réservation ne peut plus être payée'], 400);
         }
 
-        $amountInCents = (int) round(((float) $reservation->total_client_amount) * 100);
+        if ($reservation->visioSession && (
+            in_array($reservation->visioSession->status, ['ended', 'cancelled'], true)
+            || $reservation->visioSession->start_at->isPast()
+        )) {
+            return response()->json([
+                'status' => 409,
+                'message' => 'Cette séance visio est terminée, annulée ou déjà passée.',
+            ], 409);
+        }
+
+        $amountInCents = $this->amountInCents($reservation);
 
         if ($amountInCents <= 0) {
             return response()->json(['status' => 400, 'message' => 'Montant invalide'], 400);
         }
 
         if ($reservation->payment_intent_id && $reservation->payment_status === 'pending') {
-            $existingIntent = PaymentIntent::retrieve($reservation->payment_intent_id);
+            try {
+                $existingIntent = PaymentIntent::retrieve($reservation->payment_intent_id);
+            } catch (\Throwable $e) {
+                Log::warning('Payment Intent existant introuvable, recréation autorisée', [
+                    'reservation_id' => $reservation->id,
+                    'payment_intent_id' => $reservation->payment_intent_id,
+                    'error' => $e->getMessage(),
+                ]);
+                $existingIntent = null;
+            }
 
-            return response()->json([
-                'status' => 200,
-                'clientSecret' => $existingIntent->client_secret,
-                'payment_intent_id' => $existingIntent->id,
-                'amount' => $amountInCents,
-                'currency' => $reservation->currency ?: 'eur',
-                'reservation' => $reservation,
-            ]);
+            if ($existingIntent && $existingIntent->status === 'canceled') {
+                $existingIntent = null;
+            }
+
+            if ($existingIntent && ($mismatch = $this->paymentIntentMismatch($reservation, $existingIntent))) {
+                Log::critical('Payment Intent existant incohérent', $mismatch);
+
+                return response()->json([
+                    'status' => 409,
+                    'message' => 'Le paiement en cours ne correspond plus au montant de la réservation. Contactez le support.',
+                ], 409);
+            }
+
+            if ($existingIntent && $existingIntent->status === 'succeeded') {
+                $reservation = $this->completeSuccessfulPayment($reservation, $existingIntent);
+            }
+
+            if ($existingIntent) {
+                $this->linkVisioParticipantToPaymentIntent($reservation, $existingIntent->id);
+
+                return response()->json($this->paymentIntentResponse(
+                    $reservation,
+                    $existingIntent,
+                    $amountInCents
+                ));
+            }
         }
 
-        $paymentIntent = PaymentIntent::create([
-            'amount' => $amountInCents,
-            'currency' => $reservation->currency ?: 'eur',
-            'automatic_payment_methods' => ['enabled' => true],
-            'transfer_group' => 'reservation_'.$reservation->id,
-            'metadata' => [
+        try {
+            $paymentIntent = PaymentIntent::create([
+                'amount' => $amountInCents,
+                'currency' => $reservation->currency ?: 'eur',
+                'automatic_payment_methods' => ['enabled' => true],
+                'transfer_group' => 'reservation_'.$reservation->id,
+                'metadata' => [
+                    'reservation_id' => $reservation->id,
+                    'client_id' => $reservation->client_id,
+                    'intervenant_id' => $reservation->intervenant_id,
+                    'visio_session_id' => $reservation->visio_session_id,
+                    'platform_commission_amount' => $reservation->commission_amount,
+                    'coach_amount' => $reservation->intervenant_amount,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Création du Payment Intent Stripe impossible', [
                 'reservation_id' => $reservation->id,
-                'client_id' => $reservation->client_id,
-                'intervenant_id' => $reservation->intervenant_id,
-                'platform_commission_amount' => $reservation->commission_amount,
-                'coach_amount' => $reservation->intervenant_amount,
-            ],
-        ]);
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => 502,
+                'message' => 'Stripe est momentanément indisponible. Aucun débit n’a été effectué.',
+            ], 502);
+        }
 
         $reservation->update([
             'payment_intent_id' => $paymentIntent->id,
@@ -126,25 +187,76 @@ class PayementController extends Controller
             'payout_status' => 'pending',
         ]);
 
-        return response()->json([
-            'status' => 200,
-            'clientSecret' => $paymentIntent->client_secret,
-            'payment_intent_id' => $paymentIntent->id,
-            'amount' => $amountInCents,
-            'currency' => $reservation->currency ?: 'eur',
-            'reservation' => $reservation,
-        ]);
+        $this->linkVisioParticipantToPaymentIntent($reservation, $paymentIntent->id);
+
+        return response()->json($this->paymentIntentResponse(
+            $reservation->fresh(['annonce', 'intervenant', 'visioSession']),
+            $paymentIntent,
+            $amountInCents
+        ));
     }
 
-    public function checkPaymentStatus($paymentIntentId)
+    public function checkPaymentStatus(Request $request, $paymentIntentId)
     {
-        Stripe::setApiKey(config('services.stripe.secret'));
+        $stripeSecret = config('services.stripe.secret');
 
-        $paymentIntent = PaymentIntent::retrieve($paymentIntentId);
+        if (! is_string($stripeSecret) || trim($stripeSecret) === '') {
+            return response()->json([
+                'status' => 503,
+                'message' => 'Le paiement Stripe n’est pas configuré sur le serveur.',
+            ], 503);
+        }
+
+        Stripe::setApiKey($stripeSecret);
+
+        try {
+            $paymentIntent = PaymentIntent::retrieve($paymentIntentId);
+        } catch (\Throwable $e) {
+            Log::warning('Statut Stripe indisponible', [
+                'payment_intent_id' => $paymentIntentId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => 502,
+                'message' => 'Impossible de vérifier le paiement auprès de Stripe.',
+            ], 502);
+        }
+
+        $reservationId = $paymentIntent->metadata->reservation_id ?? null;
+        $reservation = $reservationId ? Reservation::find($reservationId) : null;
+
+        if (! $reservation) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Réservation liée au paiement introuvable.',
+            ], 404);
+        }
+
+        if ((int) $reservation->client_id !== (int) $request->user()->id) {
+            return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
+        }
+
+        if ($mismatch = $this->paymentIntentMismatch($reservation, $paymentIntent)) {
+            Log::critical('Vérification client Stripe incohérente', $mismatch);
+
+            return response()->json([
+                'status' => 409,
+                'message' => 'Le montant ou la devise du paiement ne correspond pas à la réservation.',
+            ], 409);
+        }
+
+        if ($paymentIntent->status === 'succeeded') {
+            $reservation = $this->completeSuccessfulPayment($reservation, $paymentIntent);
+        } elseif ($paymentIntent->status === 'requires_payment_method') {
+            $this->markPaymentAsFailed($reservation);
+            $reservation->refresh();
+        }
 
         return response()->json([
             'status' => 200,
             'payment_status' => $paymentIntent->status,
+            'reservation' => $reservation,
         ]);
     }
 
@@ -182,98 +294,15 @@ class PayementController extends Controller
                 return response()->json(['error' => 'Réservation introuvable'], 404);
             }
 
-            $expectedAmount = (int) round(((float) $reservation->total_client_amount) * 100);
-            $receivedAmount = (int) ($intent->amount_received ?? $intent->amount ?? 0);
-            $expectedCurrency = strtolower($reservation->currency ?: 'eur');
-            $receivedCurrency = strtolower((string) ($intent->currency ?? ''));
-
-            if (
-                $receivedAmount !== $expectedAmount
-                || $receivedCurrency !== $expectedCurrency
-            ) {
-                Log::critical('Paiement Stripe incohérent refusé', [
-                    'reservation_id' => $reservation->id,
-                    'payment_intent_id' => $intent->id ?? null,
-                    'expected_amount' => $expectedAmount,
-                    'received_amount' => $receivedAmount,
-                    'expected_currency' => $expectedCurrency,
-                    'received_currency' => $receivedCurrency,
-                ]);
+            if ($mismatch = $this->paymentIntentMismatch($reservation, $intent)) {
+                Log::critical('Paiement Stripe incohérent refusé', $mismatch);
 
                 return response()->json([
                     'error' => 'Le montant ou la devise du paiement ne correspond pas à la réservation.',
                 ], 400);
             }
 
-            $paymentTransitioned = false;
-
-            DB::transaction(function () use (
-                $intent,
-                $reservation,
-                &$paymentTransitioned
-            ) {
-                $reservation = Reservation::lockForUpdate()
-                    ->findOrFail($reservation->id);
-                $paymentTransitioned = ! $reservation->is_paid
-                    || $reservation->payment_status !== 'paid';
-                $amount = ($intent->amount_received ?? $intent->amount) / 100;
-                $chargeId = is_string($intent->latest_charge ?? null) ? $intent->latest_charge : null;
-                Payement::updateOrCreate(
-                    ['payment_intent_id' => $intent->id],
-                    [
-                        'reservation_id' => $reservation->id,
-                        'stripe_charge_id' => $chargeId,
-                        'amount' => $amount,
-                        'service_fee' => $reservation->service_fee_amount,
-                        'commission_rate' => $reservation->commission_rate,
-                        'commission' => $reservation->commission_amount,
-                        'intervenant_amount' => $reservation->intervenant_amount,
-                        'net_amount' => $reservation->intervenant_amount,
-                        'intervenant_id' => $reservation->intervenant_id,
-                        'client_id' => $reservation->client_id,
-                        'currency' => $reservation->currency ?: 'eur',
-                        'status' => 'paid',
-                        'payout_status' => 'pending',
-                    ]
-                );
-
-                $reservation->update([
-                    'is_paid' => true,
-                    'payment_status' => 'paid',
-                    'prestation_status' => 'paid',
-                    'payout_status' => 'pending',
-                    'payment_intent_id' => $intent->id,
-                    'stripe_charge_id' => $chargeId,
-                    'paid_at' => now(),
-                    'validation_deadline' => null,
-                ]);
-            });
-
-            $reservation = $reservation->fresh([
-                'client',
-                'intervenant',
-                'annonce',
-                'payement',
-                'visioSession',
-            ]);
-
-            if ($paymentTransitioned) {
-                try {
-                    app(ReservationVisioService::class)->syncPaidReservation($reservation);
-                } catch (\Throwable $e) {
-                    Log::error('Synchronisation visio après paiement impossible', [
-                        'reservation_id' => $reservation->id,
-                        'error' => $e->getMessage(),
-                    ]);
-                }
-
-                $this->notifyReservationUser($reservation, $reservation->client, 'paid');
-                $this->notifyReservationUser(
-                    $reservation,
-                    $reservation->intervenant,
-                    'paid_awaiting_confirmation'
-                );
-            }
+            $this->completeSuccessfulPayment($reservation, $intent);
         }
 
         if (($event->type ?? null) === 'payment_intent.payment_failed') {
@@ -283,14 +312,12 @@ class PayementController extends Controller
             if ($reservationId) {
                 $reservation = Reservation::with(['client', 'intervenant', 'annonce', 'payement'])->find($reservationId);
 
-                $reservation?->update([
-                    'payment_status' => 'failed',
-                    'prestation_status' => 'payment_failed',
-                    'payout_status' => 'failed',
-                ]);
-
                 if ($reservation) {
-                    $this->notifyReservationUsers($reservation->fresh(['client', 'intervenant', 'annonce', 'payement']), 'payment_failed');
+                    if ($mismatch = $this->paymentIntentMismatch($reservation, $intent)) {
+                        Log::warning('Échec Stripe ignoré pour un Payment Intent incohérent', $mismatch);
+                    } else {
+                        $this->markPaymentAsFailed($reservation);
+                    }
                 }
             }
         }
@@ -788,6 +815,208 @@ class PayementController extends Controller
             ->first();
 
         return response()->json(['status' => 200, 'payements' => $payement]);
+    }
+
+    private function amountInCents(Reservation $reservation): int
+    {
+        return (int) round(((float) $reservation->total_client_amount) * 100);
+    }
+
+    private function paymentIntentResponse(
+        Reservation $reservation,
+        object $paymentIntent,
+        int $amountInCents
+    ): array {
+        return [
+            'status' => 200,
+            'clientSecret' => $paymentIntent->client_secret,
+            'payment_intent_id' => $paymentIntent->id,
+            // Conservé pour compatibilité avec l'application mobile : unité minimale Stripe.
+            'amount' => $amountInCents,
+            'amount_in_cents' => $amountInCents,
+            'amount_major' => (float) $reservation->total_client_amount,
+            'currency' => strtolower($reservation->currency ?: 'eur'),
+            'payment_status' => $paymentIntent->status,
+            'already_paid' => $paymentIntent->status === 'succeeded',
+            'reservation' => $reservation,
+        ];
+    }
+
+    private function paymentIntentMismatch(Reservation $reservation, object $intent): ?array
+    {
+        $expectedAmount = $this->amountInCents($reservation);
+        $receivedAmount = (int) ($intent->amount_received ?: $intent->amount ?: 0);
+        $expectedCurrency = strtolower($reservation->currency ?: 'eur');
+        $receivedCurrency = strtolower((string) ($intent->currency ?? ''));
+        $metadataReservationId = $intent->metadata->reservation_id ?? null;
+        $metadataClientId = $intent->metadata->client_id ?? null;
+        $intentId = (string) ($intent->id ?? '');
+
+        $matches = $receivedAmount === $expectedAmount
+            && $receivedCurrency === $expectedCurrency
+            && (int) $metadataReservationId === (int) $reservation->id
+            && (! $metadataClientId || (int) $metadataClientId === (int) $reservation->client_id)
+            && (! $reservation->payment_intent_id || $intentId === $reservation->payment_intent_id);
+
+        if ($matches) {
+            return null;
+        }
+
+        return [
+            'reservation_id' => $reservation->id,
+            'payment_intent_id' => $intentId ?: null,
+            'current_payment_intent_id' => $reservation->payment_intent_id,
+            'metadata_reservation_id' => $metadataReservationId,
+            'metadata_client_id' => $metadataClientId,
+            'expected_client_id' => $reservation->client_id,
+            'expected_amount' => $expectedAmount,
+            'received_amount' => $receivedAmount,
+            'expected_currency' => $expectedCurrency,
+            'received_currency' => $receivedCurrency,
+        ];
+    }
+
+    private function completeSuccessfulPayment(Reservation $reservation, object $intent): Reservation
+    {
+        $paymentTransitioned = false;
+
+        DB::transaction(function () use ($intent, $reservation, &$paymentTransitioned) {
+            $reservation = Reservation::lockForUpdate()->findOrFail($reservation->id);
+            $paymentTransitioned = ! $reservation->is_paid
+                || $reservation->payment_status !== 'paid';
+            $amount = ($intent->amount_received ?: $intent->amount) / 100;
+            $chargeId = is_string($intent->latest_charge ?? null)
+                ? $intent->latest_charge
+                : null;
+
+            $payment = Payement::firstOrNew(['payment_intent_id' => $intent->id]);
+            $paymentIsNew = ! $payment->exists;
+            $payment->fill([
+                'reservation_id' => $reservation->id,
+                'stripe_charge_id' => $chargeId,
+                'amount' => $amount,
+                'service_fee' => $reservation->service_fee_amount,
+                'commission_rate' => $reservation->commission_rate,
+                'commission' => $reservation->commission_amount,
+                'intervenant_amount' => $reservation->intervenant_amount,
+                'net_amount' => $reservation->intervenant_amount,
+                'intervenant_id' => $reservation->intervenant_id,
+                'client_id' => $reservation->client_id,
+                'currency' => $reservation->currency ?: 'eur',
+            ]);
+
+            if ($paymentIsNew || ! in_array($payment->status, ['transferred', 'refunded', 'partially_refunded'], true)) {
+                $payment->status = 'paid';
+            }
+
+            if ($paymentIsNew || ! in_array($payment->payout_status, ['transferred', 'blocked', 'reversed', 'refunded', 'cancelled'], true)) {
+                $payment->payout_status = 'pending';
+            }
+
+            $payment->save();
+
+            $prestationStatus = in_array(
+                $reservation->prestation_status,
+                [null, 'pending_payment', 'payment_failed'],
+                true
+            ) ? 'paid' : $reservation->prestation_status;
+            $payoutStatus = in_array(
+                $reservation->payout_status,
+                [null, 'pending', 'failed'],
+                true
+            ) ? 'pending' : $reservation->payout_status;
+
+            $reservation->update([
+                'is_paid' => true,
+                'payment_status' => 'paid',
+                'prestation_status' => $prestationStatus,
+                'payout_status' => $payoutStatus,
+                'payment_intent_id' => $intent->id,
+                'stripe_charge_id' => $chargeId ?: $reservation->stripe_charge_id,
+                'paid_at' => $reservation->paid_at ?: now(),
+                'validation_deadline' => null,
+            ]);
+        });
+
+        $reservation = $reservation->fresh([
+            'client',
+            'intervenant',
+            'annonce',
+            'payement',
+            'visioSession',
+        ]);
+
+        try {
+            // Idempotent: this also repairs a paid reservation whose visio creation
+            // failed during the initial webhook/confirmation attempt.
+            app(ReservationVisioService::class)->syncPaidReservation($reservation);
+        } catch (\Throwable $e) {
+            Log::error('Synchronisation visio après paiement impossible', [
+                'reservation_id' => $reservation->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        if ($paymentTransitioned) {
+            $this->notifyReservationUser($reservation, $reservation->client, 'paid');
+            $this->notifyReservationUser(
+                $reservation,
+                $reservation->intervenant,
+                'paid_awaiting_confirmation'
+            );
+        }
+
+        return $reservation->fresh([
+            'client',
+            'intervenant',
+            'annonce',
+            'payement',
+            'visioSession',
+        ]);
+    }
+
+    private function markPaymentAsFailed(Reservation $reservation): void
+    {
+        if ($reservation->is_paid || $reservation->payment_status === 'paid') {
+            return;
+        }
+
+        $reservation->update([
+            'payment_status' => 'failed',
+            'prestation_status' => 'payment_failed',
+            'payout_status' => 'failed',
+        ]);
+
+        VisioParticipant::where('reservation_id', $reservation->id)
+            ->where('role', 'participant')
+            ->where('payment_status', '!=', 'paid')
+            ->update([
+                'status' => 'cancelled',
+                'payment_status' => 'unpaid',
+                'cancelled_at' => now(),
+            ]);
+
+        $this->notifyReservationUsers(
+            $reservation->fresh(['client', 'intervenant', 'annonce', 'payement']),
+            'payment_failed'
+        );
+    }
+
+    private function linkVisioParticipantToPaymentIntent(
+        Reservation $reservation,
+        string $paymentIntentId
+    ): void {
+        if (! $reservation->visio_session_id) {
+            return;
+        }
+
+        VisioParticipant::where('reservation_id', $reservation->id)
+            ->where('user_id', $reservation->client_id)
+            ->where('role', 'participant')
+            ->update([
+                'payment_status' => 'pending',
+                'payment_intent_id' => $paymentIntentId,
+            ]);
     }
 
     private function ensurePrestationCanBeValidated(Reservation $reservation)

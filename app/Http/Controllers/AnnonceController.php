@@ -84,7 +84,7 @@ class AnnonceController extends Controller
             ], 403);
         }
 
-        $data = $this->validateAnnonce($request);
+        $data = $this->forceVisio($this->validateAnnonce($request));
         $data['user_id'] = $user->id;
         $data['status'] = 'en_attente';
         $data['announcement_type'] = $user->hasRole('client')
@@ -106,14 +106,15 @@ class AnnonceController extends Controller
 
     public function update(Request $request, $id)
     {
-        $user_id = Auth::id();
+        $user = Auth::user();
+        $user_id = $user->id;
         $annonce = Annonce::findOrFail($id);
 
         if ((int) $annonce->user_id !== (int) $user_id) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
-        $data = $this->validateAnnonce($request, false);
+        $data = $this->forceVisio($this->validateAnnonce($request, false));
         $data['status'] = 'en_attente';
         $data['announcement_type'] = $annonce->announcement_type
             ?: ($user->hasRole('client') ? 'client_request' : 'coach_service');
@@ -306,6 +307,19 @@ class AnnonceController extends Controller
         ]);
 
         return response()->json(['status' => 200, 'message' => 'Annonce boostée', 'annonce' => $annonce]);
+    }
+
+    private function forceVisio(array $data): array
+    {
+        $data['type_prestation'] = 'visio';
+        $data['is_online'] = true;
+        $data['location'] = 'Visio GotFit';
+        $data['city'] = null;
+        $data['address'] = null;
+        $data['latitude'] = null;
+        $data['longitude'] = null;
+
+        return $data;
     }
 
     private function validateAnnonce(Request $request, bool $required = true): array

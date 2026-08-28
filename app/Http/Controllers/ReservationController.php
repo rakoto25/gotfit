@@ -424,8 +424,8 @@ class ReservationController extends Controller
         $startsAt = $reservation->scheduledAt()->utc();
         $endsAt = $reservation->endsAt()->utc();
         $title = $this->escapeIcsText($reservation->calendarTitle());
-        $description = $this->escapeIcsText('Réservation GotFit #'.$reservation->id);
-        $location = $this->escapeIcsText($reservation->annonce?->address ?: $reservation->annonce?->location ?: 'GotFit');
+        $description = $this->escapeIcsText('Réservation GotFit #'.$reservation->id.' - Accès visio depuis votre espace GotFit.');
+        $location = $this->escapeIcsText('Visio GotFit');
 
         return implode("\r\n", [
             'BEGIN:VCALENDAR',
