@@ -372,7 +372,7 @@ class PayementController extends Controller
             ]);
         }
 
-        $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech/webapp'), '/');
+        $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech'), '/');
 
         $accountLink = AccountLink::create([
             'account' => $user->stripe_account_id,
@@ -421,14 +421,14 @@ class PayementController extends Controller
 
     public function connectReturn()
     {
-        $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech/webapp'), '/');
+        $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech'), '/');
 
         return redirect()->away($frontendUrl.'/profile?stripe=success');
     }
 
     public function connectRefresh()
     {
-        $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech/webapp'), '/');
+        $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech'), '/');
 
         return redirect()->away($frontendUrl.'/profile?stripe=refresh');
     }

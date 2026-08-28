@@ -24,11 +24,18 @@ class ReservationStatusNotification extends Notification
 
     public function toMail(object $notifiable): MailMessage
     {
-        $reservation = $this->reservation->loadMissing(['annonce', 'client', 'intervenant']);
+        $reservation = $this->reservation->loadMissing(['annonce', 'client', 'intervenant', 'visioSession']);
         $subject = $this->subject();
         $message = $this->customMessage ?: $this->message();
-        $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech/webapp'), '/');
-        $reservationUrl = $frontendUrl.'/profile?reservation='.$reservation->id;
+        $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech'), '/');
+
+        $isPaid = (bool) $reservation->is_paid || $reservation->payment_status === 'paid';
+        $hasVisio = $isPaid && $reservation->visio_session_id;
+
+        $reservationUrl = $hasVisio
+            ? $frontendUrl.'/visio/'.$reservation->visio_session_id
+            : $frontendUrl.'/reservations?reservation='.$reservation->id;
+        $actionLabel = $hasVisio ? 'Accéder à la visio' : 'Voir la réservation';
 
         return (new MailMessage)
             ->subject($subject)
@@ -38,7 +45,7 @@ class ReservationStatusNotification extends Notification
             ->line('Date : '.$reservation->scheduledAt()->format('d/m/Y à H:i'))
             ->line('Client : '.($reservation->client?->name ?: 'Non renseigné'))
             ->line('Coach : '.($reservation->intervenant?->name ?: 'Non renseigné'))
-            ->action('Voir la réservation', $reservationUrl)
+            ->action($actionLabel, $reservationUrl)
             ->line('Merci,')
             ->salutation('L’équipe GotFit');
     }
