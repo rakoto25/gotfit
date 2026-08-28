@@ -60,6 +60,48 @@ class VisioParticipantLimitTest extends TestCase
             ->assertJsonValidationErrors('max_participants');
     }
 
+    public function test_paid_client_and_coach_can_access_a_future_session_immediately(): void
+    {
+        config([
+            'services.visio.provider' => 'livekit',
+            'services.visio.server_url' => 'wss://gotfit-test.livekit.cloud',
+            'services.visio.api_key' => 'test-livekit-key',
+            'services.visio.api_secret' => 'test-livekit-secret',
+            'services.visio.token_ttl' => 3600,
+        ]);
+
+        $coach = $this->userWithRole('intervenant');
+        $client = $this->userWithRole('client');
+
+        Sanctum::actingAs($coach);
+        $creation = $this->postJson('/api/visio/sessions', [
+            'title' => 'Séance accessible immédiatement',
+            'start_at' => now()->addDay()->toIso8601String(),
+            'min_participants' => 1,
+            'max_participants' => 1,
+            'price' => 0,
+        ])->assertCreated();
+
+        $sessionId = $creation->json('session.id');
+
+        Sanctum::actingAs($client);
+        $this->postJson("/api/visio/sessions/{$sessionId}/reserve")
+            ->assertCreated();
+
+        // Même si l'heure planifiée est demain, le coach peut démarrer tout de suite.
+        Sanctum::actingAs($coach);
+        $this->postJson("/api/visio/sessions/{$sessionId}/start")
+            ->assertOk()
+            ->assertJsonPath('session.status', 'live');
+
+        // Et le client payé/validé peut rejoindre immédiatement.
+        Sanctum::actingAs($client);
+        $this->postJson("/api/visio/sessions/{$sessionId}/join")
+            ->assertOk()
+            ->assertJsonPath('provider', 'livekit')
+            ->assertJsonPath('server_url', 'wss://gotfit-test.livekit.cloud');
+    }
+
     private function userWithRole(string $slug): User
     {
         $role = Role::firstOrCreate(

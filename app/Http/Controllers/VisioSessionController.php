@@ -404,16 +404,7 @@ class VisioSessionController extends Controller
             return response()->json(['status' => 422, 'message' => 'Cette séance ne peut plus démarrer.'], 422);
         }
 
-        $opensAt = $session->start_at->copy()->subMinutes(15);
         $closesAt = $session->start_at->copy()->addMinutes($session->duration_minutes)->addMinutes(30);
-
-        if (now()->lt($opensAt)) {
-            return response()->json([
-                'status' => 422,
-                'message' => 'La salle pourra être démarrée 15 minutes avant la séance.',
-                'available_at' => $opensAt->toIso8601String(),
-            ], 422);
-        }
 
         if (now()->gt($closesAt)) {
             return response()->json([
@@ -464,16 +455,7 @@ class VisioSessionController extends Controller
             return response()->json(['status' => 422, 'message' => 'Cette séance visio est encore en préparation.'], 422);
         }
 
-        $opensAt = $session->start_at->copy()->subMinutes(15);
         $closesAt = $session->start_at->copy()->addMinutes($session->duration_minutes)->addMinutes(30);
-
-        if (now()->lt($opensAt)) {
-            return response()->json([
-                'status' => 422,
-                'message' => 'La salle ouvrira 15 minutes avant la séance.',
-                'available_at' => $opensAt->toIso8601String(),
-            ], 422);
-        }
 
         if (now()->gt($closesAt)) {
             return response()->json(['status' => 422, 'message' => 'La période d’accès à cette séance est terminée.'], 422);
