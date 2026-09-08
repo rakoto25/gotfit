@@ -208,6 +208,27 @@ class User extends Authenticatable
         return $this->hasMany(CoachForumPost::class);
     }
 
+    public function forumDiscussions(): HasMany
+    {
+        return $this->hasMany(ForumDiscussion::class, 'author_id');
+    }
+
+    public function forumComments(): HasMany
+    {
+        return $this->hasMany(ForumComment::class, 'author_id');
+    }
+
+    public function forumNotifications(): HasMany
+    {
+        return $this->hasMany(ForumNotification::class);
+    }
+
+    public function canAccessCoachForum(): bool
+    {
+        return $this->hasRole('admin')
+            || ($this->hasRole('intervenant') && $this->account_status === 'approved');
+    }
+
     public function clientOnboarding()
     {
         return $this->hasOne(ClientOnboarding::class, 'client_id');

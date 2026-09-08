@@ -1,6 +1,6 @@
 # Gotfit API
 
-API Laravel 10 de la plateforme Gotfit. Elle gère l'authentification, les rôles,
+API Laravel 10 de la plateforme GotFit. Elle gère l'authentification, les rôles,
 les profils coach, le parcours client, la marketplace Stripe Connect, les
 réservations, les visios, la messagerie et l'administration.
 
@@ -54,12 +54,48 @@ l'adresse email, puis :
 Les comptes coach créés via Google restent en attente de validation
 administrateur.
 
+## Forum privé des coachs
+
+La migration crée les canaux, discussions, réponses imbriquées, réactions,
+mentions, notifications et signalements. Elle ajoute automatiquement le canal
+officiel **Annonces GotFit** et reprend les anciens messages du forum dans le
+canal Général.
+
+Toutes les routes `/api/forum/*` sont réservées aux coachs dont le compte est
+`approved` et aux administrateurs. Les routes `/api/admin/forum/*` permettent à
+l'administration de gérer les canaux, les signalements, l'épinglage et le
+verrouillage des discussions.
+
+## Visio après paiement
+
+Une réservation payée crée sa séance LiveKit, mais le client attend que le
+coach intervenant génère le lien privé depuis ses réservations. Une salle de
+groupe accepte au maximum quatre coachés et un coach, soit cinq personnes.
+
+Configurer notamment :
+
+```dotenv
+FRONTEND_URL=https://gotfit.tech
+VISIO_PROVIDER=livekit
+VISIO_SERVER_URL=wss://votre-instance-livekit
+VISIO_API_KEY=
+VISIO_API_SECRET=
+```
+
+En production, exécuter les migrations avant de déployer la webapp :
+
+```bash
+composer install --no-dev --optimize-autoloader
+php artisan migrate --force
+php artisan optimize
+```
+
 ## Tests
 
 ```bash
 php artisan test
 ```
 
-Les tests couvrent notamment l'inscription classique, la création Google, le
-rattachement d'un compte existant et le rejet d'un jeton destiné à une autre
-application.
+Les tests couvrent notamment les droits du forum, son cycle CRUD, les réponses
+imbriquées, les réactions, mentions, signalements, la modération, la création
+du lien visio après paiement et la limite de cinq participants.

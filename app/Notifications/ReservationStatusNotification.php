@@ -30,10 +30,13 @@ class ReservationStatusNotification extends Notification
         $frontendUrl = rtrim(env('FRONTEND_URL', 'https://gotfit.tech'), '/');
 
         $isPaid = (bool) $reservation->is_paid || $reservation->payment_status === 'paid';
-        $hasVisio = $isPaid && $reservation->visio_session_id;
+        $hasVisio = $isPaid
+            && $reservation->visio_session_id
+            && $reservation->visioSession?->link_created_at
+            && $reservation->visioSession?->join_url;
 
         $reservationUrl = $hasVisio
-            ? $frontendUrl.'/visio/'.$reservation->visio_session_id
+            ? $reservation->visioSession->join_url
             : $frontendUrl.'/reservations?reservation='.$reservation->id;
         $actionLabel = $hasVisio ? 'Accéder à la visio' : 'Voir la réservation';
 

@@ -12,24 +12,24 @@ class VisioParticipantLimitTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_visio_v1_accepts_only_two_clients_in_addition_to_the_coach(): void
+    public function test_visio_accepts_four_clients_in_addition_to_the_coach(): void
     {
         $coach = $this->userWithRole('intervenant');
-        $clients = collect(range(1, 3))->map(fn () => $this->userWithRole('client'));
+        $clients = collect(range(1, 5))->map(fn () => $this->userWithRole('client'));
 
         Sanctum::actingAs($coach);
         $creation = $this->postJson('/api/visio/sessions', [
-            'title' => 'Petit groupe V1',
+            'title' => 'Petit groupe GotFit',
             'start_at' => now()->addDay()->toIso8601String(),
             'min_participants' => 1,
-            'max_participants' => 2,
+            'max_participants' => 4,
             'price' => 0,
         ]);
 
         $creation
             ->assertCreated()
-            ->assertJsonPath('session.max_participants', 2)
-            ->assertJsonPath('session.max_attendees', 3);
+            ->assertJsonPath('session.max_participants', 4)
+            ->assertJsonPath('session.max_attendees', 5);
 
         $sessionId = $creation->json('session.id');
 
@@ -40,13 +40,19 @@ class VisioParticipantLimitTest extends TestCase
         $this->postJson("/api/visio/sessions/{$sessionId}/reserve")->assertCreated();
 
         Sanctum::actingAs($clients[2]);
+        $this->postJson("/api/visio/sessions/{$sessionId}/reserve")->assertCreated();
+
+        Sanctum::actingAs($clients[3]);
+        $this->postJson("/api/visio/sessions/{$sessionId}/reserve")->assertCreated();
+
+        Sanctum::actingAs($clients[4]);
         $this->postJson("/api/visio/sessions/{$sessionId}/reserve")
             ->assertUnprocessable();
 
-        $this->assertDatabaseCount('visio_participants', 3);
+        $this->assertDatabaseCount('visio_participants', 5);
     }
 
-    public function test_coach_cannot_create_a_session_for_more_than_two_clients(): void
+    public function test_coach_cannot_create_a_session_for_more_than_five_people_total(): void
     {
         $coach = $this->userWithRole('intervenant');
         Sanctum::actingAs($coach);
@@ -54,7 +60,7 @@ class VisioParticipantLimitTest extends TestCase
         $this->postJson('/api/visio/sessions', [
             'title' => 'Trop grande session',
             'start_at' => now()->addDay()->toIso8601String(),
-            'max_participants' => 3,
+            'max_participants' => 5,
         ])
             ->assertUnprocessable()
             ->assertJsonValidationErrors('max_participants');

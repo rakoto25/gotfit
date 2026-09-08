@@ -12,8 +12,8 @@ return new class extends Migration
             return;
         }
 
-        // V1 : deux coachés au maximum. Le coach est compté séparément,
-        // soit trois personnes au total dans la salle.
+        // Historique V1 : limite initiale à deux coachés. Une migration
+        // ultérieure étend la salle à cinq personnes au total.
         DB::table('visio_sessions')
             ->where(function ($query) {
                 $query->whereNull('max_participants')

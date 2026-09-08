@@ -43,6 +43,7 @@ return [
         'api_secret' => env('VISIO_API_SECRET'),
         'secret' => env('VISIO_SECRET'),
         'token_ttl' => env('VISIO_TOKEN_TTL', 3600),
+        'frontend_url' => env('FRONTEND_URL', 'https://gotfit.tech'),
     ],
 
 ];

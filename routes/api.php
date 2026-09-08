@@ -10,6 +10,8 @@ use App\Http\Controllers\ContactController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\FavoriteController;
 use App\Http\Controllers\FitnessAssessmentController;
+use App\Http\Controllers\ForumController;
+use App\Http\Controllers\ForumModerationController;
 use App\Http\Controllers\InscriptionController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\MissionController;
@@ -340,6 +342,45 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/visio/sessions/{id}/participants/{participantId}/paid', [VisioSessionController::class, 'markParticipantPaid'])
         ->whereNumber('id')
         ->whereNumber('participantId');
+
+    Route::post('/reservation/{reservation}/visio-link', [VisioSessionController::class, 'createReservationLink'])
+        ->whereNumber('reservation');
+});
+
+/*
+|--------------------------------------------------------------------------
+| FORUM DES COACHS VALIDÉS
+|--------------------------------------------------------------------------
+*/
+
+Route::middleware(['auth:sanctum', 'forum_access'])->prefix('forum')->group(function () {
+    Route::get('/channels', [ForumController::class, 'channels']);
+    Route::get('/discussions', [ForumController::class, 'discussions']);
+    Route::post('/discussions', [ForumController::class, 'storeDiscussion'])->middleware('throttle:20,1');
+    Route::get('/discussions/{discussion}', [ForumController::class, 'show'])->whereNumber('discussion');
+    Route::match(['put', 'patch'], '/discussions/{discussion}', [ForumController::class, 'updateDiscussion'])->whereNumber('discussion');
+    Route::delete('/discussions/{discussion}', [ForumController::class, 'destroyDiscussion'])->whereNumber('discussion');
+    Route::post('/discussions/{discussion}/comments', [ForumController::class, 'storeComment'])->middleware('throttle:40,1')->whereNumber('discussion');
+    Route::post('/discussions/{discussion}/reactions', [ForumController::class, 'reactToDiscussion'])->whereNumber('discussion');
+    Route::post('/discussions/{discussion}/report', [ForumController::class, 'reportDiscussion'])->middleware('throttle:10,1')->whereNumber('discussion');
+
+    Route::match(['put', 'patch'], '/comments/{comment}', [ForumController::class, 'updateComment'])->whereNumber('comment');
+    Route::delete('/comments/{comment}', [ForumController::class, 'destroyComment'])->whereNumber('comment');
+    Route::post('/comments/{comment}/reactions', [ForumController::class, 'reactToComment'])->whereNumber('comment');
+    Route::post('/comments/{comment}/report', [ForumController::class, 'reportComment'])->middleware('throttle:10,1')->whereNumber('comment');
+
+    Route::get('/coaches', [ForumController::class, 'coaches']);
+    Route::get('/notifications', [ForumController::class, 'notifications']);
+    Route::get('/notifications/unread-count', [ForumController::class, 'unreadCount']);
+    Route::put('/notifications/read-all', [ForumController::class, 'readAllNotifications']);
+    Route::put('/notifications/{notification}/read', [ForumController::class, 'readNotification'])->whereNumber('notification');
+});
+
+// Compatibilité avec l'ancienne application mobile, avec les mêmes droits renforcés.
+Route::middleware(['auth:sanctum', 'forum_access'])->group(function () {
+    Route::get('/coach/forum', [CoachForumController::class, 'index']);
+    Route::post('/coach/forum', [CoachForumController::class, 'store'])->middleware('throttle:20,1');
+    Route::delete('/coach/forum/{post}', [CoachForumController::class, 'destroy'])->whereNumber('post');
 });
 
 /*
@@ -468,6 +509,19 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
     */
 
     Route::put('/admin/reviews/{id}/moderate', [ReviewController::class, 'moderate'])->whereNumber('id');
+
+    /*
+    |--------------------------------------------------------------------------
+    | MODÉRATION DU FORUM
+    |--------------------------------------------------------------------------
+    */
+
+    Route::get('/admin/forum/reports', [ForumModerationController::class, 'reports']);
+    Route::put('/admin/forum/reports/{report}', [ForumModerationController::class, 'updateReport'])->whereNumber('report');
+    Route::post('/admin/forum/channels', [ForumModerationController::class, 'storeChannel']);
+    Route::put('/admin/forum/channels/{channel}', [ForumModerationController::class, 'updateChannel'])->whereNumber('channel');
+    Route::delete('/admin/forum/channels/{channel}', [ForumModerationController::class, 'destroyChannel'])->whereNumber('channel');
+    Route::put('/admin/forum/discussions/{discussion}/moderate', [ForumModerationController::class, 'moderateDiscussion'])->whereNumber('discussion');
 });
 
 /*
@@ -477,12 +531,6 @@ Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
 */
 
 Route::middleware(['auth:sanctum', 'is_intervenant'])->group(function () {
-    Route::get('/coach/forum', [CoachForumController::class, 'index']);
-    Route::post('/coach/forum', [CoachForumController::class, 'store'])
-        ->middleware('throttle:20,1');
-    Route::delete('/coach/forum/{post}', [CoachForumController::class, 'destroy'])
-        ->whereNumber('post');
-
     Route::get('/coach/credentials', [DocumentController::class, 'myCredentials']);
     Route::post('/coach/credentials', [DocumentController::class, 'storeCredential']);
     Route::delete('/coach/credentials/{id}', [DocumentController::class, 'destroy'])->whereNumber('id');

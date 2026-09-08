@@ -9,9 +9,9 @@ class VisioSession extends Model
 {
     use HasFactory;
 
-    public const MAX_CLIENT_PARTICIPANTS_V1 = 2;
+    public const MAX_CLIENT_PARTICIPANTS_V1 = 4;
 
-    public const MAX_ATTENDEES_V1 = 3;
+    public const MAX_ATTENDEES_V1 = 5;
 
     protected $fillable = [
         'reservation_id',
@@ -31,6 +31,9 @@ class VisioSession extends Model
         'provider_room_id',
         'room_name',
         'join_url',
+        'share_token',
+        'link_created_by',
+        'link_created_at',
         'started_at',
         'ended_at',
         'cancellation_reason',
@@ -40,6 +43,7 @@ class VisioSession extends Model
         'start_at' => 'datetime',
         'started_at' => 'datetime',
         'ended_at' => 'datetime',
+        'link_created_at' => 'datetime',
         'duration_minutes' => 'integer',
         'min_participants' => 'integer',
         'max_participants' => 'integer',

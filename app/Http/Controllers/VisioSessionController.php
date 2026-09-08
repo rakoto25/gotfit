@@ -99,8 +99,8 @@ class VisioSessionController extends Controller
             'description' => ['nullable', 'string', 'max:5000'],
             'start_at' => ['required', 'date'],
             'duration_minutes' => ['nullable', 'integer', 'min:15', 'max:360'],
-            'min_participants' => ['nullable', 'integer', 'min:1', 'max:2'],
-            'max_participants' => ['nullable', 'integer', 'min:1', 'max:2'],
+            'min_participants' => ['nullable', 'integer', 'min:1', 'max:4'],
+            'max_participants' => ['nullable', 'integer', 'min:1', 'max:4'],
             'price' => ['nullable', 'numeric', 'min:0', 'max:999999'],
             'currency' => ['nullable', 'string', 'size:3'],
             'status' => ['nullable', Rule::in(['draft', 'open'])],
@@ -178,8 +178,8 @@ class VisioSessionController extends Controller
             'description' => ['nullable', 'string', 'max:5000'],
             'start_at' => ['nullable', 'date'],
             'duration_minutes' => ['nullable', 'integer', 'min:15', 'max:360'],
-            'min_participants' => ['nullable', 'integer', 'min:1', 'max:2'],
-            'max_participants' => ['nullable', 'integer', 'min:1', 'max:2'],
+            'min_participants' => ['nullable', 'integer', 'min:1', 'max:4'],
+            'max_participants' => ['nullable', 'integer', 'min:1', 'max:4'],
             'price' => ['nullable', 'numeric', 'min:0', 'max:999999'],
             'currency' => ['nullable', 'string', 'size:3'],
             'status' => ['nullable', Rule::in(['draft', 'open'])],
@@ -314,7 +314,7 @@ class VisioSessionController extends Controller
             ) {
                 if ($lockedSession->available_places <= 0) {
                     throw ValidationException::withMessages([
-                        'session' => ['Cette séance visio est complète (deux coachés maximum).'],
+                        'session' => ['Cette séance visio est complète (quatre coachés maximum).'],
                     ]);
                 }
             }
@@ -378,6 +378,52 @@ class VisioSessionController extends Controller
             'message' => 'Paiement participant validé avec succès',
             'participant' => $participant->fresh('user:id,name,email,photo'),
             'session' => $session->fresh(['participants.user:id,name,email,photo']),
+        ]);
+    }
+
+    public function createReservationLink(Request $request, Reservation $reservation)
+    {
+        $user = $request->user();
+
+        if (! $user->hasRole('admin') && (int) $reservation->intervenant_id !== (int) $user->id) {
+            return response()->json([
+                'status' => 403,
+                'message' => 'Seul le coach de cette prestation peut créer le lien visio.',
+            ], 403);
+        }
+
+        if (! $reservation->is_paid && $reservation->payment_status !== 'paid') {
+            return response()->json([
+                'status' => 402,
+                'message' => 'Le paiement du client doit être confirmé avant de créer le lien visio.',
+            ], 402);
+        }
+
+        $session = app(ReservationVisioService::class)->syncPaidReservation($reservation);
+        if (! $session || in_array($session->status, ['ended', 'cancelled'], true)) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Cette séance visio ne peut pas recevoir de nouveau lien.',
+            ], 422);
+        }
+
+        if (! $session->share_token || ! $session->join_url) {
+            $token = Str::random(48);
+            $frontendUrl = rtrim((string) config('services.visio.frontend_url', 'https://gotfit.tech'), '/');
+
+            $session->update([
+                'share_token' => $token,
+                'join_url' => $frontendUrl.'/visio/'.$session->id.'?invite='.$token,
+                'link_created_by' => $user->id,
+                'link_created_at' => now(),
+            ]);
+        }
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'Lien visio privé prêt à être partagé avec le client.',
+            'join_url' => $session->join_url,
+            'session' => $session->fresh(['coach:id,name,email,photo', 'participants.user:id,name,email,photo', 'reservation']),
         ]);
     }
 
@@ -445,6 +491,13 @@ class VisioSessionController extends Controller
 
         if ($participant && $participant->role === 'participant' && $participant->payment_status !== 'paid') {
             return response()->json(['status' => 402, 'message' => 'Le paiement doit être validé avant de rejoindre la visio.'], 402);
+        }
+
+        if ($session->reservation_id && ! $this->canManageSession($user, $session) && ! $session->link_created_at) {
+            return response()->json([
+                'status' => 423,
+                'message' => 'Le coach doit encore créer et partager le lien de cette visioconférence.',
+            ], 423);
         }
 
         if (in_array($session->status, ['ended', 'cancelled'], true)) {
