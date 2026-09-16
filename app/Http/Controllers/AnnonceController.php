@@ -6,6 +6,7 @@ use App\Models\Annonce;
 use App\Models\BusinessSetting;
 use App\Models\Reservation;
 use App\Notifications\ReservationStatusNotification;
+use App\Support\AnnonceAvailability;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -31,6 +32,11 @@ class AnnonceController extends Controller
                 'error' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    public function mine(Request $request)
+    {
+        return response()->json(['annonces' => $request->user()->annonces()->latest()->get()]);
     }
 
     public function getAllAnnonce()
@@ -114,6 +120,10 @@ class AnnonceController extends Controller
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
+        if ($user->hasRole('intervenant') && $user->account_status !== 'approved') {
+            return response()->json(['message' => 'Votre compte coach doit être validé pour modifier une annonce.'], 403);
+        }
+
         $data = $this->forceVisio($this->validateAnnonce($request, false));
         $data['status'] = 'en_attente';
         $data['announcement_type'] = $annonce->announcement_type
@@ -183,8 +193,8 @@ class AnnonceController extends Controller
         $user_id = Auth::id();
 
         $request->validate([
-            'reservation_date' => 'required|date|after_or_equal:today',
-            'reservation_time' => ['required', 'regex:/^\d{2}:\d{2}(:\d{2})?$/'],
+            'reservation_date' => 'required|date_format:Y-m-d|after_or_equal:today',
+            'reservation_time' => ['required', 'regex:/^([01]\d|2[0-3]):[0-5]\d(:00)?$/'],
             'guests' => 'nullable|integer|min:1',
             'note' => 'nullable|string|max:1000',
         ]);
@@ -217,6 +227,8 @@ class AnnonceController extends Controller
             return response()->json(['status' => 400, 'message' => 'Vous ne pouvez pas réserver votre propre annonce'], 400);
         }
 
+        AnnonceAvailability::assertAvailable($annonce, $request->reservation_date, $reservationTime);
+
         $existing = Reservation::where('client_id', $user_id)
             ->where('reservation_date', $request->reservation_date)
             ->where('reservation_time', $reservationTime)
@@ -224,7 +236,7 @@ class AnnonceController extends Controller
             ->first();
 
         if ($existing) {
-            if (! $existing->is_paid && in_array($existing->payment_status, ['unpaid', 'pending', null], true)) {
+            if ((int) $existing->annonce_id === (int) $annonce->id && ! $existing->is_paid && in_array($existing->payment_status, ['unpaid', 'pending', null], true)) {
                 return response()->json([
                     'status' => 200,
                     'message' => 'Réservation déjà créée. Vous pouvez continuer le paiement.',
@@ -340,7 +352,15 @@ class AnnonceController extends Controller
             'latitude' => 'nullable|numeric',
             'longitude' => 'nullable|numeric',
             'available_days' => 'nullable|array',
+            'available_days.*' => 'string|in:monday,tuesday,wednesday,thursday,friday,saturday,sunday',
             'available_hours' => 'nullable|array',
+            'available_hours.*' => $request->user()->hasRole('intervenant')
+                ? ['string', 'regex:/^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/', function ($attribute, $value, $fail) {
+                    if (strcmp(substr($value, 0, 5), substr($value, 6, 5)) >= 0) {
+                        $fail('La fin du créneau doit être après son début.');
+                    }
+                }]
+                : ['string', 'max:255'],
             'image' => 'nullable|image|mimes:jpg,jpeg,png,webp|max:4096',
         ]);
     }

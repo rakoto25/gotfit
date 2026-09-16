@@ -2,8 +2,10 @@
 
 namespace App\Providers;
 
-use Illuminate\Support\ServiceProvider;
+use App\Models\User;
+use App\Notifications\CoachApprovedNotification;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -21,5 +23,12 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Schema::defaultStringLength(191);
+
+        User::updated(function (User $user) {
+            if ($user->wasChanged('account_status') && $user->account_status === 'approved'
+                && $user->hasRole('intervenant')) {
+                $user->notify(new CoachApprovedNotification);
+            }
+        });
     }
 }
