@@ -6,7 +6,6 @@ use App\Jobs\SendExpoPushNotification;
 use App\Models\Reservation;
 use App\Models\ReservationRescheduleHistory;
 use App\Notifications\ReservationStatusNotification;
-use App\Support\AnnonceAvailability;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -149,8 +148,8 @@ class ReservationController extends Controller
     public function reschedule(Request $request, $id)
     {
         $data = $request->validate([
-            'reservation_date' => ['required', 'date_format:Y-m-d', 'after_or_equal:today'],
-            'reservation_time' => ['required', 'regex:/^([01]\d|2[0-3]):[0-5]\d(:00)?$/'],
+            'reservation_date' => ['required', 'date', 'after_or_equal:today'],
+            'reservation_time' => ['required', 'regex:/^\d{2}:\d{2}(:\d{2})?$/'],
             'note' => ['nullable', 'string', 'max:1000'],
             'notify_coach' => ['nullable', 'boolean'],
             'source' => ['nullable', 'string', 'max:50'],
@@ -202,8 +201,6 @@ class ReservationController extends Controller
             $time = strlen($data['reservation_time']) === 5
                 ? $data['reservation_time'].':00'
                 : $data['reservation_time'];
-
-            AnnonceAvailability::assertAvailable($reservation->annonce, $data['reservation_date'], $time);
 
             $clientConflict = Reservation::query()
                 ->whereKeyNot($reservation->id)

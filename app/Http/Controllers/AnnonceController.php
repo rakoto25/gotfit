@@ -6,7 +6,6 @@ use App\Models\Annonce;
 use App\Models\BusinessSetting;
 use App\Models\Reservation;
 use App\Notifications\ReservationStatusNotification;
-use App\Support\AnnonceAvailability;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -18,7 +17,7 @@ class AnnonceController extends Controller
     public function index()
     {
         try {
-            $annonces = Annonce::with('user:id,name,photo,bio,account_status')
+            $annonces = Annonce::with('user:id,name,display_name,photo,bio,account_status')
                 ->where('status', 'valide')
                 ->orderByDesc('is_boosted')
                 ->latest()
@@ -34,15 +33,10 @@ class AnnonceController extends Controller
         }
     }
 
-    public function mine(Request $request)
-    {
-        return response()->json(['annonces' => $request->user()->annonces()->latest()->get()]);
-    }
-
     public function getAllAnnonce()
     {
         try {
-            $annonces = Annonce::with('user:id,name,email,account_status')->latest()->get();
+            $annonces = Annonce::with('user:id,name,display_name,email,account_status')->latest()->get();
 
             return response()->json(['status' => 200, 'annonces' => $annonces]);
         } catch (\Exception $e) {
@@ -54,11 +48,24 @@ class AnnonceController extends Controller
         }
     }
 
+    public function myAnnouncements(Request $request)
+    {
+        $annonces = Annonce::with('user:id,name,display_name,photo,bio,account_status')
+            ->where('user_id', $request->user()->id)
+            ->latest()
+            ->get();
+
+        return response()->json([
+            'status' => 200,
+            'annonces' => $annonces,
+        ]);
+    }
+
     public function detailAnnonce($id)
     {
         try {
             $annonce = Annonce::with([
-                'user:id,name,photo,bio,phone,address,account_status',
+                'user:id,name,display_name,photo,bio,phone,address,account_status',
                 'reservations',
             ])->findOrFail($id);
 
@@ -91,6 +98,11 @@ class AnnonceController extends Controller
         }
 
         $data = $this->forceVisio($this->validateAnnonce($request));
+
+        if ($user->hasRole('intervenant')) {
+            $this->validateCoachOffer($request);
+        }
+
         $data['user_id'] = $user->id;
         $data['status'] = 'en_attente';
         $data['announcement_type'] = $user->hasRole('client')
@@ -120,11 +132,12 @@ class AnnonceController extends Controller
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
-        if ($user->hasRole('intervenant') && $user->account_status !== 'approved') {
-            return response()->json(['message' => 'Votre compte coach doit être validé pour modifier une annonce.'], 403);
+        $data = $this->forceVisio($this->validateAnnonce($request, false));
+
+        if ($annonce->announcement_type === 'coach_service' || $user->hasRole('intervenant')) {
+            $this->validateCoachOffer($request, false);
         }
 
-        $data = $this->forceVisio($this->validateAnnonce($request, false));
         $data['status'] = 'en_attente';
         $data['announcement_type'] = $annonce->announcement_type
             ?: ($user->hasRole('client') ? 'client_request' : 'coach_service');
@@ -193,8 +206,8 @@ class AnnonceController extends Controller
         $user_id = Auth::id();
 
         $request->validate([
-            'reservation_date' => 'required|date_format:Y-m-d|after_or_equal:today',
-            'reservation_time' => ['required', 'regex:/^([01]\d|2[0-3]):[0-5]\d(:00)?$/'],
+            'reservation_date' => 'required|date|after_or_equal:today',
+            'reservation_time' => ['required', 'regex:/^\d{2}:\d{2}(:\d{2})?$/'],
             'guests' => 'nullable|integer|min:1',
             'note' => 'nullable|string|max:1000',
         ]);
@@ -227,7 +240,12 @@ class AnnonceController extends Controller
             return response()->json(['status' => 400, 'message' => 'Vous ne pouvez pas réserver votre propre annonce'], 400);
         }
 
-        AnnonceAvailability::assertAvailable($annonce, $request->reservation_date, $reservationTime);
+        if (! $this->matchesCoachAvailability($annonce, $request->reservation_date, $reservationTime)) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Choisissez uniquement un créneau indiqué par le coach pour cette prestation.',
+            ], 422);
+        }
 
         $existing = Reservation::where('client_id', $user_id)
             ->where('reservation_date', $request->reservation_date)
@@ -236,7 +254,7 @@ class AnnonceController extends Controller
             ->first();
 
         if ($existing) {
-            if ((int) $existing->annonce_id === (int) $annonce->id && ! $existing->is_paid && in_array($existing->payment_status, ['unpaid', 'pending', null], true)) {
+            if (! $existing->is_paid && in_array($existing->payment_status, ['unpaid', 'pending', null], true)) {
                 return response()->json([
                     'status' => 200,
                     'message' => 'Réservation déjà créée. Vous pouvez continuer le paiement.',
@@ -344,7 +362,7 @@ class AnnonceController extends Controller
             'category' => 'nullable|string|max:100',
             'type_prestation' => 'nullable|string|max:100',
             'price' => 'nullable|numeric|min:0',
-            'duration' => 'nullable|integer|min:1',
+            'duration' => 'nullable|integer|min:15|max:480',
             'is_online' => 'nullable|boolean',
             'location' => 'nullable|string|max:255',
             'city' => 'nullable|string|max:100',
@@ -354,15 +372,70 @@ class AnnonceController extends Controller
             'available_days' => 'nullable|array',
             'available_days.*' => 'string|in:monday,tuesday,wednesday,thursday,friday,saturday,sunday',
             'available_hours' => 'nullable|array',
-            'available_hours.*' => $request->user()->hasRole('intervenant')
-                ? ['string', 'regex:/^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/', function ($attribute, $value, $fail) {
-                    if (strcmp(substr($value, 0, 5), substr($value, 6, 5)) >= 0) {
-                        $fail('La fin du créneau doit être après son début.');
-                    }
-                }]
-                : ['string', 'max:255'],
+            'available_hours.*' => 'string|max:255',
             'image' => 'nullable|image|mimes:jpg,jpeg,png,webp|max:4096',
         ]);
+    }
+
+    private function validateCoachOffer(Request $request, bool $required = true): void
+    {
+        $presence = $required ? 'required' : 'sometimes|required';
+
+        $request->validate([
+            'price' => [$presence, 'numeric', 'min:0.01'],
+            'duration' => [$presence, 'integer', 'min:15', 'max:480'],
+            'available_days' => [$presence, 'array', 'min:1'],
+            'available_days.*' => ['string', 'in:monday,tuesday,wednesday,thursday,friday,saturday,sunday'],
+            'available_hours' => [$presence, 'array', 'min:1'],
+            'available_hours.*' => ['string', 'regex:/^(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d$/'],
+        ], [
+            'price.required' => 'Indiquez le prix de la prestation.',
+            'available_days.required' => 'Indiquez au moins un jour disponible.',
+            'available_hours.required' => 'Indiquez au moins un créneau horaire.',
+        ]);
+    }
+
+    private function matchesCoachAvailability(Annonce $annonce, string $date, string $time): bool
+    {
+        $days = array_values(array_filter((array) $annonce->available_days));
+        $hours = array_values(array_filter((array) $annonce->available_hours));
+
+        if ($days === [] || $hours === []) {
+            return false;
+        }
+
+        $day = strtolower(Carbon::parse($date)->englishDayOfWeek);
+
+        if (! in_array($day, $days, true)) {
+            return false;
+        }
+
+        $requestedStart = Carbon::createFromFormat('H:i:s', $time);
+        $requestedEnd = $requestedStart->copy()->addMinutes((int) ($annonce->duration ?: 60));
+
+        foreach ($hours as $range) {
+            if (! preg_match('/^(\d{2}:\d{2})-(\d{2}:\d{2})$/', (string) $range, $matches)) {
+                continue;
+            }
+
+            $rangeStart = Carbon::createFromFormat('H:i', $matches[1]);
+            $rangeEnd = Carbon::createFromFormat('H:i', $matches[2]);
+
+            if ($rangeEnd->lessThanOrEqualTo($rangeStart)) {
+                continue;
+            }
+
+            if ($requestedStart->greaterThanOrEqualTo($rangeStart) && $requestedEnd->lessThanOrEqualTo($rangeEnd)) {
+                $offsetMinutes = $rangeStart->diffInMinutes($requestedStart);
+                $duration = max(15, (int) ($annonce->duration ?: 60));
+
+                if ($offsetMinutes % $duration === 0) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private function notifyReservationUsers(Reservation $reservation, string $event, ?string $message = null): void

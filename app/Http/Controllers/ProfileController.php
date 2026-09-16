@@ -46,6 +46,7 @@ class ProfileController extends Controller
 
         $validated = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:255'],
+            'display_name' => ['sometimes', 'nullable', 'string', 'max:80'],
 
             'email' => [
                 'sometimes',
@@ -109,7 +110,7 @@ class ProfileController extends Controller
         $data = [];
         $filesToDelete = [];
 
-        foreach (['name', 'email', 'bio', 'phone', 'address'] as $column) {
+        foreach (['name', 'display_name', 'email', 'bio', 'phone', 'address'] as $column) {
             if ($request->exists($column)) {
                 $data[$column] = $validated[$column] ?? null;
             }
@@ -278,6 +279,7 @@ class ProfileController extends Controller
         return [
             'id' => $user->id,
             'name' => $user->name,
+            'display_name' => $this->getUserValue($user, 'display_name') ?: $user->name,
             'email' => $user->email,
 
             'bio' => $this->getUserValue($user, 'bio'),
@@ -328,6 +330,7 @@ class ProfileController extends Controller
         return [
             'id' => $user->id,
             'name' => $user->name,
+            'display_name' => $this->getUserValue($user, 'display_name') ?: $user->name,
             'email' => $user->email,
 
             'phone' => $this->getUserValue($user, 'phone'),

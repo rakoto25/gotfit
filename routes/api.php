@@ -265,9 +265,9 @@ Route::middleware('auth:sanctum')->group(function () {
     |--------------------------------------------------------------------------
     */
 
-    Route::get('/annonces/my', [AnnonceController::class, 'mine']);
+    Route::get('/annonces/my', [AnnonceController::class, 'myAnnouncements']);
     Route::post('/annonces', [AnnonceController::class, 'store']);
-    Route::put('/annonces/{id}', [AnnonceController::class, 'update'])->whereNumber('id');
+    Route::match(['put', 'post'], '/annonces/{id}', [AnnonceController::class, 'update'])->whereNumber('id');
     Route::delete('/annonces/{id}', [AnnonceController::class, 'destroy'])->whereNumber('id');
 
     /*

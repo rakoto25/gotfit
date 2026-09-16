@@ -62,10 +62,6 @@ class ReservationPaymentRescheduleTest extends TestCase
         ]);
 
         $newDate = Carbon::now()->addDays(5)->format('Y-m-d');
-        $annonce->update([
-            'available_days' => [strtolower(Carbon::parse($newDate)->englishDayOfWeek)],
-            'available_hours' => ['14:00-17:00'],
-        ]);
 
         Sanctum::actingAs($client);
 

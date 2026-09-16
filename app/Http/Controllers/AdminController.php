@@ -9,9 +9,11 @@ use App\Models\Reservation;
 use App\Models\Review;
 use App\Models\Role;
 use App\Models\User;
+use App\Notifications\CoachAccountApprovedNotification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
 
@@ -143,6 +145,7 @@ class AdminController extends Controller
 
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'display_name' => ['nullable', 'string', 'max:80'],
             'email' => ['required', 'email', 'unique:users,email'],
             'password' => ['required', 'string', 'min:6'],
 
@@ -167,6 +170,7 @@ class AdminController extends Controller
 
         $userData = [
             'name' => $data['name'],
+            'display_name' => $data['display_name'] ?? null,
             'email' => $data['email'],
             'password' => Hash::make($data['password']),
         ];
@@ -224,10 +228,16 @@ class AdminController extends Controller
             $user->roles()->sync([$roleId]);
         }
 
+        $user->load('roles');
+        $notificationSent = $this->notifyCoachApprovedIfNeeded($user, null);
+
         return response()->json([
             'status' => 201,
-            'message' => 'Utilisateur créé avec succès',
-            'user' => $user->load('roles'),
+            'message' => $notificationSent
+                ? 'Utilisateur créé avec succès. Un email de validation a été envoyé au coach.'
+                : 'Utilisateur créé avec succès',
+            'notification_sent' => $notificationSent,
+            'user' => $user,
         ], 201);
     }
 
@@ -240,6 +250,7 @@ class AdminController extends Controller
     public function updateUser(Request $request, $id)
     {
         $user = User::findOrFail($id);
+        $previousAccountStatus = $user->account_status;
 
         if ($request->filled('siret')) {
             $request->merge([
@@ -249,6 +260,7 @@ class AdminController extends Controller
 
         $data = $request->validate([
             'name' => ['nullable', 'string', 'max:255'],
+            'display_name' => ['nullable', 'string', 'max:80'],
 
             'email' => [
                 'nullable',
@@ -286,6 +298,10 @@ class AdminController extends Controller
 
         if (array_key_exists('name', $data)) {
             $user->name = $data['name'];
+        }
+
+        if (array_key_exists('display_name', $data) && Schema::hasColumn('users', 'display_name')) {
+            $user->display_name = $data['display_name'];
         }
 
         if (array_key_exists('email', $data)) {
@@ -368,10 +384,16 @@ class AdminController extends Controller
             }
         }
 
+        $user->load('roles');
+        $notificationSent = $this->notifyCoachApprovedIfNeeded($user, $previousAccountStatus);
+
         return response()->json([
             'status' => 200,
-            'message' => 'Utilisateur modifié avec succès',
-            'user' => $user->load('roles'),
+            'message' => $notificationSent
+                ? 'Utilisateur modifié avec succès. Un email de validation a été envoyé au coach.'
+                : 'Utilisateur modifié avec succès',
+            'notification_sent' => $notificationSent,
+            'user' => $user,
         ]);
     }
 
@@ -416,6 +438,7 @@ class AdminController extends Controller
         ]);
 
         $user = User::findOrFail($id);
+        $previousAccountStatus = $user->account_status;
 
         $status = $this->normalizeAccountStatus($request->status);
 
@@ -441,10 +464,16 @@ class AdminController extends Controller
             $user->update($updateData);
         }
 
+        $user->load('roles');
+        $notificationSent = $this->notifyCoachApprovedIfNeeded($user, $previousAccountStatus);
+
         return response()->json([
             'status' => 200,
-            'message' => 'Statut utilisateur mis à jour',
-            'user' => $user->load('roles'),
+            'message' => $notificationSent
+                ? 'Compte coach validé. Un email lui a été envoyé afin qu’il puisse publier ses annonces.'
+                : 'Statut utilisateur mis à jour',
+            'notification_sent' => $notificationSent,
+            'user' => $user,
         ]);
     }
 
@@ -611,4 +640,29 @@ class AdminController extends Controller
             default => 'pending',
         };
     }
+    private function notifyCoachApprovedIfNeeded(User $user, ?string $previousStatus): bool
+    {
+        if (
+            $user->account_status !== 'approved'
+            || $previousStatus === 'approved'
+            || ! $user->hasRole('intervenant')
+            || ! $user->email
+        ) {
+            return false;
+        }
+
+        try {
+            $user->notify(new CoachAccountApprovedNotification());
+
+            return true;
+        } catch (\Throwable $e) {
+            Log::warning('Notification de validation coach non envoyée', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
+    }
+
 }
