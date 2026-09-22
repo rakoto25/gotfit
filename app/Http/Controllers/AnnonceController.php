@@ -266,17 +266,22 @@ class AnnonceController extends Controller
             return response()->json(['status' => 400, 'message' => 'Vous avez déjà une réservation à cette heure'], 400);
         }
 
-        $coachConflict = Reservation::where('intervenant_id', $annonce->user_id)
+        // Un coach peut accueillir plusieurs clients sur le même créneau.
+        // La limite par défaut est de 4 participants pour une séance collective.
+        // Elle pourra ensuite être remplacée par un champ max_participants sur l'annonce.
+        $maxParticipants = 4;
+
+        $coachReservationsCount = Reservation::where('intervenant_id', $annonce->user_id)
             ->where('reservation_date', $request->reservation_date)
             ->where('reservation_time', $reservationTime)
             ->whereNotIn('status', ['refuse', 'annule'])
             ->whereNotIn('payment_status', ['failed', 'refunded'])
-            ->first();
+            ->count();
 
-        if ($coachConflict) {
+        if ($coachReservationsCount >= $maxParticipants) {
             return response()->json([
                 'status' => 400,
-                'message' => 'Ce créneau n’est plus disponible pour ce coach.',
+                'message' => 'Ce créneau est complet pour ce coach.',
             ], 400);
         }
 

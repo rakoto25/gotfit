@@ -215,17 +215,19 @@ class ReservationController extends Controller
                 abort(409, 'Vous avez déjà une réservation sur ce créneau.');
             }
 
-            $coachConflict = Reservation::query()
+            $maxParticipants = 4;
+
+            $coachReservationsCount = Reservation::query()
                 ->whereKeyNot($reservation->id)
                 ->where('intervenant_id', $reservation->intervenant_id)
                 ->whereDate('reservation_date', $data['reservation_date'])
                 ->whereTime('reservation_time', $time)
                 ->whereNotIn('status', ['refuse', 'annule'])
                 ->whereNotIn('payment_status', ['failed', 'refunded'])
-                ->exists();
+                ->count();
 
-            if ($coachConflict) {
-                abort(409, 'Ce créneau n’est plus disponible pour ce coach.');
+            if ($coachReservationsCount >= $maxParticipants) {
+                abort(409, 'Ce créneau est complet pour ce coach.');
             }
 
             $history = ReservationRescheduleHistory::create([
