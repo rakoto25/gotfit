@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Annonce;
 use App\Models\BusinessSetting;
 use App\Models\Reservation;
+use App\Notifications\AnnonceStatusNotification;
 use App\Notifications\ReservationStatusNotification;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -162,7 +163,10 @@ class AnnonceController extends Controller
     {
         $request->validate(['status' => 'nullable|in:valide,refuse,en_attente,brouillon']);
         $annonce = Annonce::findOrFail($id);
-        $annonce->update(['status' => $request->status ?? 'valide']);
+        $previousStatus = $annonce->status;
+        $status = $request->status ?? 'valide';
+        $annonce->update(['status' => $status]);
+        $this->notifyAnnonceOwner($annonce, $previousStatus, $status);
 
         return response()->json([
             'status' => 200,
@@ -174,7 +178,9 @@ class AnnonceController extends Controller
     public function refuserAnnonce($id)
     {
         $annonce = Annonce::findOrFail($id);
+        $previousStatus = $annonce->status;
         $annonce->update(['status' => 'refuse']);
+        $this->notifyAnnonceOwner($annonce, $previousStatus, 'refuse');
 
         return response()->json([
             'status' => 200,
@@ -458,6 +464,30 @@ class AnnonceController extends Controller
                     ]);
                 }
             }
+        }
+    }
+
+    private function notifyAnnonceOwner(Annonce $annonce, string $previousStatus, string $status): void
+    {
+        if ($previousStatus === $status || ! in_array($status, ['valide', 'refuse'], true)) {
+            return;
+        }
+
+        $owner = $annonce->user;
+
+        if (! $owner?->email) {
+            return;
+        }
+
+        try {
+            $owner->notify(new AnnonceStatusNotification($annonce, $status));
+        } catch (\Throwable $e) {
+            Log::warning('Notification de modération d’annonce non envoyée', [
+                'annonce_id' => $annonce->id,
+                'user_id' => $owner->id,
+                'status' => $status,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 }
