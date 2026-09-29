@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Jobs\SendExpoPushNotification;
+use App\Models\Annonce;
 use App\Models\Reservation;
 use App\Models\ReservationRescheduleHistory;
+use App\Models\User;
 use App\Notifications\ReservationStatusNotification;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -215,7 +217,15 @@ class ReservationController extends Controller
                 abort(409, 'Vous avez déjà une réservation sur ce créneau.');
             }
 
-            $maxParticipants = 4;
+            $annonce = Annonce::query()->lockForUpdate()->findOrFail($reservation->annonce_id);
+            User::query()->lockForUpdate()->findOrFail($reservation->intervenant_id);
+            $maxParticipants = max(
+                1,
+                min(
+                    Annonce::MAX_PARTICIPANTS,
+                    (int) ($annonce->max_participants ?: Annonce::DEFAULT_MAX_PARTICIPANTS)
+                )
+            );
 
             $coachReservationsCount = Reservation::query()
                 ->whereKeyNot($reservation->id)

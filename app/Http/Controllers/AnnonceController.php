@@ -5,11 +5,13 @@ namespace App\Http\Controllers;
 use App\Models\Annonce;
 use App\Models\BusinessSetting;
 use App\Models\Reservation;
+use App\Models\User;
 use App\Notifications\AnnonceStatusNotification;
 use App\Notifications\ReservationStatusNotification;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
@@ -109,6 +111,10 @@ class AnnonceController extends Controller
         $data['announcement_type'] = $user->hasRole('client')
             ? 'client_request'
             : 'coach_service';
+
+        if ($data['announcement_type'] === 'client_request') {
+            $data['max_participants'] = null;
+        }
 
         if ($request->hasFile('image')) {
             $data['image'] = $request->file('image')->store('annonces', 'public');
@@ -214,7 +220,6 @@ class AnnonceController extends Controller
         $request->validate([
             'reservation_date' => 'required|date|after_or_equal:today',
             'reservation_time' => ['required', 'regex:/^\d{2}:\d{2}(:\d{2})?$/'],
-            'guests' => 'nullable|integer|min:1',
             'note' => 'nullable|string|max:1000',
         ]);
 
@@ -272,25 +277,6 @@ class AnnonceController extends Controller
             return response()->json(['status' => 400, 'message' => 'Vous avez déjà une réservation à cette heure'], 400);
         }
 
-        // Un coach peut accueillir plusieurs clients sur le même créneau.
-        // La limite par défaut est de 4 participants pour une séance collective.
-        // Elle pourra ensuite être remplacée par un champ max_participants sur l'annonce.
-        $maxParticipants = 4;
-
-        $coachReservationsCount = Reservation::where('intervenant_id', $annonce->user_id)
-            ->where('reservation_date', $request->reservation_date)
-            ->where('reservation_time', $reservationTime)
-            ->whereNotIn('status', ['refuse', 'annule'])
-            ->whereNotIn('payment_status', ['failed', 'refunded'])
-            ->count();
-
-        if ($coachReservationsCount >= $maxParticipants) {
-            return response()->json([
-                'status' => 400,
-                'message' => 'Ce créneau est complet pour ce coach.',
-            ], 400);
-        }
-
         $price = (float) $annonce->price;
         $serviceFeeRate = (float) BusinessSetting::value('client_service_fee_rate', 5);
         $commissionRate = (float) BusinessSetting::value('intervenant_commission_rate', 12);
@@ -299,28 +285,57 @@ class AnnonceController extends Controller
         $intervenantAmount = round($price - $commissionAmount, 2);
         $totalClientAmount = round($price + $serviceFeeAmount, 2);
 
-        $reservation = Reservation::create([
-            'annonce_id' => $annonce->id,
-            'client_id' => $user_id,
-            'intervenant_id' => $annonce->user_id,
-            'reservation_date' => $request->reservation_date,
-            'reservation_time' => $reservationTime,
-            'guests' => $request->guests ?? 1,
-            'note' => $request->note,
-            'price' => $price,
-            'service_fee_rate' => $serviceFeeRate,
-            'service_fee_amount' => $serviceFeeAmount,
-            'commission_rate' => $commissionRate,
-            'commission_amount' => $commissionAmount,
-            'intervenant_amount' => $intervenantAmount,
-            'total_client_amount' => $totalClientAmount,
-            'currency' => 'eur',
-            'status' => 'attente',
-            'is_paid' => false,
-            'payment_status' => 'pending',
-            'prestation_status' => 'pending_payment',
-            'payout_status' => 'pending',
-        ]);
+        $reservation = DB::transaction(function () use (
+            $annonce,
+            $commissionAmount,
+            $commissionRate,
+            $intervenantAmount,
+            $price,
+            $request,
+            $reservationTime,
+            $serviceFeeAmount,
+            $serviceFeeRate,
+            $totalClientAmount,
+            $user_id
+        ) {
+            $lockedAnnonce = Annonce::query()->lockForUpdate()->findOrFail($annonce->id);
+            User::query()->lockForUpdate()->findOrFail($lockedAnnonce->user_id);
+            $maxParticipants = $this->maxParticipantsFor($lockedAnnonce);
+
+            $coachReservationsCount = Reservation::where('intervenant_id', $lockedAnnonce->user_id)
+                ->whereDate('reservation_date', $request->reservation_date)
+                ->whereTime('reservation_time', $reservationTime)
+                ->whereNotIn('status', ['refuse', 'annule'])
+                ->whereNotIn('payment_status', ['failed', 'refunded'])
+                ->count();
+
+            if ($coachReservationsCount >= $maxParticipants) {
+                abort(409, 'Ce créneau a atteint la capacité maximale définie par le coach.');
+            }
+
+            return Reservation::create([
+                'annonce_id' => $lockedAnnonce->id,
+                'client_id' => $user_id,
+                'intervenant_id' => $lockedAnnonce->user_id,
+                'reservation_date' => $request->reservation_date,
+                'reservation_time' => $reservationTime,
+                'guests' => 1,
+                'note' => $request->note,
+                'price' => $price,
+                'service_fee_rate' => $serviceFeeRate,
+                'service_fee_amount' => $serviceFeeAmount,
+                'commission_rate' => $commissionRate,
+                'commission_amount' => $commissionAmount,
+                'intervenant_amount' => $intervenantAmount,
+                'total_client_amount' => $totalClientAmount,
+                'currency' => 'eur',
+                'status' => 'attente',
+                'is_paid' => false,
+                'payment_status' => 'pending',
+                'prestation_status' => 'pending_payment',
+                'payout_status' => 'pending',
+            ]);
+        });
 
         $reservation->load(['annonce', 'client', 'intervenant']);
         $this->notifyReservationUsers($reservation, 'created');
@@ -374,6 +389,7 @@ class AnnonceController extends Controller
             'type_prestation' => 'nullable|string|max:100',
             'price' => 'nullable|numeric|min:0',
             'duration' => 'nullable|integer|min:15|max:480',
+            'max_participants' => 'nullable|integer|min:1|max:'.Annonce::MAX_PARTICIPANTS,
             'is_online' => 'nullable|boolean',
             'location' => 'nullable|string|max:255',
             'city' => 'nullable|string|max:100',
@@ -395,12 +411,14 @@ class AnnonceController extends Controller
         $request->validate([
             'price' => [$presence, 'numeric', 'min:0.01'],
             'duration' => [$presence, 'integer', 'min:15', 'max:480'],
+            'max_participants' => [$presence, 'integer', 'min:1', 'max:'.Annonce::MAX_PARTICIPANTS],
             'available_days' => [$presence, 'array', 'min:1'],
             'available_days.*' => ['string', 'in:monday,tuesday,wednesday,thursday,friday,saturday,sunday'],
             'available_hours' => [$presence, 'array', 'min:1'],
             'available_hours.*' => ['string', 'regex:/^(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d$/'],
         ], [
             'price.required' => 'Indiquez le prix de la prestation.',
+            'max_participants.required' => 'Indiquez le nombre maximum de coachés par créneau.',
             'available_days.required' => 'Indiquez au moins un jour disponible.',
             'available_hours.required' => 'Indiquez au moins un créneau horaire.',
         ]);
@@ -447,6 +465,17 @@ class AnnonceController extends Controller
         }
 
         return false;
+    }
+
+    private function maxParticipantsFor(Annonce $annonce): int
+    {
+        return max(
+            1,
+            min(
+                Annonce::MAX_PARTICIPANTS,
+                (int) ($annonce->max_participants ?: Annonce::DEFAULT_MAX_PARTICIPANTS)
+            )
+        );
     }
 
     private function notifyReservationUsers(Reservation $reservation, string $event, ?string $message = null): void
