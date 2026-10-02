@@ -26,7 +26,7 @@ class StripeMarketplaceService
                 'quantity' => 1,
                 'price_data' => [
                     'currency' => $offer->currency,
-                    'unit_amount' => $offer->amount_total,
+                    'unit_amount' => $offer->stripe_amount_due ?? $offer->amount_total,
                     'product_data' => [
                         'name' => $offer->title,
                         'description' => $offer->session_count.' séance(s) GotFit',
@@ -49,7 +49,7 @@ class StripeMarketplaceService
         }
 
         return CheckoutSession::create($data, [
-            'idempotency_key' => 'offer_'.$offer->id.'_checkout_v1',
+            'idempotency_key' => 'offer_'.$offer->id.'_checkout_'.$offer->wallet_amount_applied.'_v1',
         ]);
     }
 
@@ -89,6 +89,8 @@ class StripeMarketplaceService
             'client_id' => (string) $offer->client_id,
             'coach_id' => (string) $offer->coach_id,
             'session_count' => (string) $offer->session_count,
+            'wallet_amount_applied' => (string) $offer->wallet_amount_applied,
+            'offer_amount_total' => (string) $offer->amount_total,
         ];
     }
 }

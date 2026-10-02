@@ -10,7 +10,7 @@ class WalletTransaction extends Model
     use HasFactory;
 
     protected $fillable = [
-        'wallet_id', 'pack_id', 'payment_intent_id', 'type', 'amount',
+        'wallet_id', 'pack_id', 'offer_id', 'payment_intent_id', 'type', 'amount',
         'balance_after', 'idempotency_key', 'metadata',
     ];
 
@@ -24,5 +24,10 @@ class WalletTransaction extends Model
     public function pack()
     {
         return $this->belongsTo(Pack::class);
+    }
+
+    public function offer()
+    {
+        return $this->belongsTo(Offer::class);
     }
 }

@@ -246,9 +246,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/packs', [PackController::class, 'index']);
     Route::get('/packs/{pack}', [PackController::class, 'show'])->whereNumber('pack');
+    Route::post('/pack-sessions/{session}/schedule', [PackController::class, 'scheduleSession'])->whereNumber('session');
     Route::post('/pack-sessions/{session}/complete', [PackController::class, 'completeSession'])->whereNumber('session');
     Route::post('/pack-sessions/{session}/validate', [PackController::class, 'validateSession'])->whereNumber('session');
     Route::post('/pack-sessions/{session}/dispute', [PackController::class, 'disputeSession'])->whereNumber('session');
+    Route::post('/pack-sessions/{session}/cancel', [PackController::class, 'cancelSession'])->whereNumber('session');
+    Route::post('/pack-sessions/{session}/no-show', [PackController::class, 'noShowSession'])->whereNumber('session');
     Route::get('/wallet', [WalletController::class, 'show']);
 
     /*

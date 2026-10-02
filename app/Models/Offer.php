@@ -11,13 +11,16 @@ class Offer extends Model
 
     protected $fillable = [
         'conversation_id', 'coach_id', 'client_id', 'title', 'description',
-        'session_count', 'amount_total', 'currency', 'status', 'expires_at',
-        'stripe_checkout_session_id', 'stripe_payment_intent_id', 'paid_at', 'cancelled_at',
+        'session_count', 'amount_total', 'wallet_amount_applied', 'stripe_amount_due',
+        'currency', 'status', 'expires_at', 'stripe_checkout_session_id',
+        'stripe_checkout_url', 'stripe_payment_intent_id', 'paid_at', 'cancelled_at',
     ];
 
     protected $casts = [
         'session_count' => 'integer',
         'amount_total' => 'integer',
+        'wallet_amount_applied' => 'integer',
+        'stripe_amount_due' => 'integer',
         'expires_at' => 'datetime',
         'paid_at' => 'datetime',
         'cancelled_at' => 'datetime',

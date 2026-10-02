@@ -7,6 +7,7 @@ use App\Models\Conversations;
 use App\Models\Message;
 use App\Models\Offer;
 use App\Services\StripeMarketplaceService;
+use App\Services\WalletService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -78,7 +79,7 @@ class ChatOfferController extends Controller
         ]);
     }
 
-    public function checkout(Request $request, Offer $offer)
+    public function checkout(Request $request, Offer $offer, WalletService $wallets)
     {
         $this->authorizeConversation($request, $offer->conversation);
         abort_unless((int) $offer->client_id === (int) $request->user()->id, 403,
@@ -99,16 +100,43 @@ class ChatOfferController extends Controller
             return response()->json(['status' => 503, 'message' => 'Stripe n’est pas configuré.'], 503);
         }
 
+        $data = $request->validate([
+            'wallet_amount' => 'nullable|numeric|min:0',
+        ]);
+        $walletAmount = (int) round(((float) ($data['wallet_amount'] ?? 0)) * 100);
+
+        if ($offer->stripe_checkout_session_id && $offer->stripe_checkout_url) {
+            if ($walletAmount !== $offer->wallet_amount_applied) {
+                return response()->json([
+                    'status' => 409,
+                    'message' => 'Une session de paiement existe déjà avec un autre montant wallet.',
+                ], 409);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'checkout_url' => $offer->stripe_checkout_url,
+                'checkout_session_id' => $offer->stripe_checkout_session_id,
+                'offer' => $offer,
+            ]);
+        }
+
+        $offer = $wallets->applyToOffer($offer, $walletAmount);
+
         $offer->loadMissing('client');
         try {
             $session = $this->stripe->createOfferCheckout($offer);
         } catch (\Throwable $e) {
+            $wallets->releaseOfferDebit($offer, 'stripe_checkout_failed');
             report($e);
 
             return response()->json(['status' => 502, 'message' => 'Stripe est momentanément indisponible.'], 502);
         }
 
-        $offer->update(['stripe_checkout_session_id' => $session->id]);
+        $offer->update([
+            'stripe_checkout_session_id' => $session->id,
+            'stripe_checkout_url' => $session->url,
+        ]);
 
         return response()->json([
             'status' => 200,
@@ -118,7 +146,7 @@ class ChatOfferController extends Controller
         ]);
     }
 
-    public function cancel(Request $request, Offer $offer)
+    public function cancel(Request $request, Offer $offer, WalletService $wallets)
     {
         $this->authorizeConversation($request, $offer->conversation);
         abort_unless((int) $offer->coach_id === (int) $request->user()->id, 403);
@@ -126,6 +154,7 @@ class ChatOfferController extends Controller
         if ($offer->status === 'paid') {
             return response()->json(['status' => 409, 'message' => 'Une offre payée ne peut pas être annulée.'], 409);
         }
+        $wallets->releaseOfferDebit($offer, 'offer_cancelled');
         $offer->update(['status' => 'cancelled', 'cancelled_at' => now()]);
 
         return response()->json(['status' => 200, 'offer' => $offer->fresh()]);

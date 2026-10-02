@@ -66,8 +66,11 @@ la seule base du retour frontend.
 - `GET /api/packs`
 - `GET /api/packs/{pack}`
 - `POST /api/pack-sessions/{session}/complete` côté coach
+- `POST /api/pack-sessions/{session}/schedule` avec `scheduled_at` côté coach
 - `POST /api/pack-sessions/{session}/validate` côté client
 - `POST /api/pack-sessions/{session}/dispute` avec `{ "reason": "..." }`
+- `POST /api/pack-sessions/{session}/cancel` pour une annulation client ou coach
+- `POST /api/pack-sessions/{session}/no-show` côté coach après le délai de grâce
 - `POST /api/admin/pack-sessions/{session}/resolve` avec `validate` ou `cancel`
 
 Statuts d’une séance : `pending`, `awaiting_client_confirmation`, `validated`,
@@ -75,17 +78,28 @@ Statuts d’une séance : `pending`, `awaiting_client_confirmation`, `validated`
 Stripe Transfer. Le montant net coach est réparti au centime près entre les
 séances.
 
+Les règles d’annulation tardive et de no-show sont paramétrables depuis les
+business settings : délai de 24 heures, délai de grâce de 15 minutes et choix
+de consommer ou non la séance. Une annulation coach ou une annulation client
+faite suffisamment tôt remet la séance à disposition. L’historique est conservé
+dans `pack_session_cancellations`.
+
 ### Cashback
 
 `GET /api/wallet` renvoie le solde et l’historique paginé. Le paiement confirmé
-crédite 1 % du montant du pack. Un remboursement total ou partiel recalcule le
-cashback éligible et ajoute un mouvement d’annulation traçable.
+crédite 1 % du montant réellement payé sur Stripe. Pour utiliser la cagnotte,
+envoyer `wallet_amount` à `POST /api/offers/{offer}/checkout`. Le solde réservé
+est libéré si la création Stripe échoue, si la session Checkout expire ou si
+l’offre est annulée. Un remboursement total restitue aussi la part payée avec
+la cagnotte. Tous les débits, libérations, crédits et annulations restent
+traçables dans `wallet_transactions`.
 
 ## Webhooks Stripe
 
 Configurer l’URL publique `POST /api/payment/webhook` avec au minimum :
 
 - `checkout.session.completed`
+- `checkout.session.expired`
 - `payment_intent.succeeded`
 - `payment_intent.payment_failed`
 - `charge.refunded`

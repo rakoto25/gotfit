@@ -13,6 +13,7 @@ use App\Models\VisioParticipant;
 use App\Notifications\ReservationStatusNotification;
 use App\Services\PackPaymentService;
 use App\Services\ReservationVisioService;
+use App\Services\WalletService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -26,7 +27,10 @@ use Stripe\Webhook;
 
 class PayementController extends Controller
 {
-    public function __construct(private readonly PackPaymentService $packPayments) {}
+    public function __construct(
+        private readonly PackPaymentService $packPayments,
+        private readonly WalletService $wallets
+    ) {}
 
     public function index()
     {
@@ -312,6 +316,13 @@ class PayementController extends Controller
                         (int) ($object->amount_total ?? 0),
                         (string) ($object->currency ?? $offer->currency)
                     );
+                }
+            }
+
+            if ($type === 'checkout.session.expired') {
+                $offerId = $object->metadata->offer_id ?? null;
+                if ($offerId && ($offer = Offer::find($offerId))) {
+                    $this->wallets->releaseOfferDebit($offer, 'checkout_expired');
                 }
             }
 

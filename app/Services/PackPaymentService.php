@@ -13,6 +13,8 @@ use Illuminate\Validation\ValidationException;
 
 class PackPaymentService
 {
+    public function __construct(private readonly WalletService $wallets) {}
+
     public function completeOfferPayment(
         Offer $offer,
         string $paymentIntentId,
@@ -26,7 +28,8 @@ class PackPaymentService
             $offer = Offer::lockForUpdate()->findOrFail($offer->id);
             $currency = strtolower($currency);
 
-            if ($amountReceived !== $offer->amount_total || $currency !== strtolower($offer->currency)) {
+            $stripeAmountDue = $offer->stripe_amount_due ?? $offer->amount_total;
+            if ($amountReceived !== $stripeAmountDue || $currency !== strtolower($offer->currency)) {
                 throw ValidationException::withMessages([
                     'payment' => 'Le montant ou la devise Stripe ne correspond pas à l’offre.',
                 ]);
@@ -65,6 +68,8 @@ class PackPaymentService
                 'stripe_payment_intent_id' => $paymentIntentId,
                 'stripe_charge_id' => $chargeId,
                 'amount_total' => $offer->amount_total,
+                'wallet_amount_used' => $offer->wallet_amount_applied,
+                'stripe_amount_paid' => $amountReceived,
                 'commission_rate' => $commissionRate,
                 'commission_amount' => $commissionAmount,
                 'coach_net_amount' => $coachNet,
@@ -112,6 +117,7 @@ class PackPaymentService
                 'paid_at' => now(),
             ]);
 
+            $this->wallets->markOfferDebitCaptured($offer, $pack->id);
             $this->creditCashback($pack);
 
             return $pack->load('sessions');
@@ -128,9 +134,16 @@ class PackPaymentService
                 return null;
             }
 
-            $refunded = max(0, min($amountRefunded, $pack->amount_total));
-            $pack->status = $refunded >= $pack->amount_total ? 'refunded' : 'partially_refunded';
+            $refunded = max(0, min($amountRefunded, $pack->stripe_amount_paid ?: $pack->amount_total));
+            $pack->refunded_amount = $refunded;
+            $pack->status = $refunded >= ($pack->stripe_amount_paid ?: $pack->amount_total)
+                ? 'refunded'
+                : 'partially_refunded';
             $pack->save();
+
+            if ($pack->status === 'refunded') {
+                $this->wallets->refundPackDebit($pack);
+            }
 
             $payment = Payement::where('payment_intent_id', $paymentIntentId)->first();
             if ($payment) {
@@ -144,7 +157,7 @@ class PackPaymentService
                 ->where('type', 'cashback_credit')->sum('amount');
             $alreadyReversed = WalletTransaction::where('pack_id', $pack->id)
                 ->where('type', 'cashback_reversal')->sum('amount');
-            $eligibleAfterRefund = (int) round(($pack->amount_total - $refunded) * 0.01);
+            $eligibleAfterRefund = (int) round((max(0, $pack->stripe_amount_paid - $refunded)) * 0.01);
             $toReverse = max(0, $credited - $alreadyReversed - $eligibleAfterRefund);
 
             if ($toReverse > 0) {
@@ -173,7 +186,7 @@ class PackPaymentService
 
     private function creditCashback(Pack $pack): void
     {
-        $cashback = (int) round($pack->amount_total * 0.01);
+        $cashback = (int) round($pack->stripe_amount_paid * 0.01);
         if ($cashback <= 0) {
             return;
         }
