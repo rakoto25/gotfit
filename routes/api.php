@@ -3,6 +3,7 @@
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminMessageController;
 use App\Http\Controllers\AnnonceController;
+use App\Http\Controllers\ChatOfferController;
 use App\Http\Controllers\ClientJourneyController;
 use App\Http\Controllers\CoachForumController;
 use App\Http\Controllers\ConnexionController;
@@ -15,6 +16,7 @@ use App\Http\Controllers\ForumModerationController;
 use App\Http\Controllers\InscriptionController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\MissionController;
+use App\Http\Controllers\PackController;
 use App\Http\Controllers\PayementController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PushTokenController;
@@ -22,6 +24,7 @@ use App\Http\Controllers\ReservationController;
 use App\Http\Controllers\ReviewController;
 use App\Http\Controllers\SocialAuthController;
 use App\Http\Controllers\VisioSessionController;
+use App\Http\Controllers\WalletController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Laravel\Sanctum\PersonalAccessToken;
@@ -235,6 +238,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/message/{message_id}/reaction', [MessageController::class, 'removeReaction'])
         ->whereNumber('message_id');
 
+    Route::post('/conversations/{conversation}/offers', [ChatOfferController::class, 'store'])
+        ->whereNumber('conversation');
+    Route::get('/offers/{offer}', [ChatOfferController::class, 'show'])->whereNumber('offer');
+    Route::post('/offers/{offer}/checkout', [ChatOfferController::class, 'checkout'])->whereNumber('offer');
+    Route::post('/offers/{offer}/cancel', [ChatOfferController::class, 'cancel'])->whereNumber('offer');
+
+    Route::get('/packs', [PackController::class, 'index']);
+    Route::get('/packs/{pack}', [PackController::class, 'show'])->whereNumber('pack');
+    Route::post('/pack-sessions/{session}/complete', [PackController::class, 'completeSession'])->whereNumber('session');
+    Route::post('/pack-sessions/{session}/validate', [PackController::class, 'validateSession'])->whereNumber('session');
+    Route::post('/pack-sessions/{session}/dispute', [PackController::class, 'disputeSession'])->whereNumber('session');
+    Route::get('/wallet', [WalletController::class, 'show']);
+
     /*
     |--------------------------------------------------------------------------
     | ANCIENNES ROUTES MESSAGERIE GARDÉES TEMPORAIREMENT
@@ -391,6 +407,8 @@ Route::middleware(['auth:sanctum', 'forum_access'])->group(function () {
 */
 
 Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
+    Route::post('/admin/pack-sessions/{session}/resolve', [PackController::class, 'resolveSession'])
+        ->whereNumber('session');
     /*
     |--------------------------------------------------------------------------
     | DASHBOARD ADMIN

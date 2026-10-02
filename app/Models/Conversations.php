@@ -57,4 +57,9 @@ class Conversations extends Model
     {
         return $this->hasOne(Message::class, 'conversation_id')->latestOfMany();
     }
+
+    public function offers()
+    {
+        return $this->hasMany(Offer::class, 'conversation_id');
+    }
 }

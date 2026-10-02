@@ -3,10 +3,15 @@
 namespace App\Http\Controllers;
 
 use App\Jobs\SendExpoPushNotification;
+use App\Models\Offer;
+use App\Models\PackPayout;
 use App\Models\Payement;
 use App\Models\Reservation;
+use App\Models\StripeEvent;
+use App\Models\User;
 use App\Models\VisioParticipant;
 use App\Notifications\ReservationStatusNotification;
+use App\Services\PackPaymentService;
 use App\Services\ReservationVisioService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -21,6 +26,8 @@ use Stripe\Webhook;
 
 class PayementController extends Controller
 {
+    public function __construct(private readonly PackPaymentService $packPayments) {}
+
     public function index()
     {
         $payments = Payement::with(['client:id,name,email', 'intervenant:id,name,email', 'reservation'])->latest()->get();
@@ -280,62 +287,113 @@ class PayementController extends Controller
             return response()->json(['error' => 'Webhook invalide'], 400);
         }
 
-        if (($event->type ?? null) === 'payment_intent.succeeded') {
-            $intent = $event->data->object;
-            $reservationId = $intent->metadata->reservation_id ?? null;
-
-            if (! $reservationId) {
-                return response()->json(['error' => 'Réservation absente'], 400);
-            }
-
-            $reservation = Reservation::find($reservationId);
-
-            if (! $reservation) {
-                return response()->json(['error' => 'Réservation introuvable'], 404);
-            }
-
-            if ($mismatch = $this->paymentIntentMismatch($reservation, $intent)) {
-                Log::critical('Paiement Stripe incohérent refusé', $mismatch);
-
-                return response()->json([
-                    'error' => 'Le montant ou la devise du paiement ne correspond pas à la réservation.',
-                ], 400);
-            }
-
-            $this->completeSuccessfulPayment($reservation, $intent);
+        $eventRecord = StripeEvent::firstOrCreate(
+            ['event_id' => (string) $event->id],
+            ['type' => (string) $event->type, 'status' => 'processing']
+        );
+        if ($eventRecord->status === 'processed') {
+            return response()->json(['success' => true, 'duplicate' => true]);
         }
 
-        if (($event->type ?? null) === 'payment_intent.payment_failed') {
-            $intent = $event->data->object;
-            $reservationId = $intent->metadata->reservation_id ?? null;
+        try {
+            $type = (string) ($event->type ?? '');
+            $object = $event->data->object;
 
-            if ($reservationId) {
-                $reservation = Reservation::with(['client', 'intervenant', 'annonce', 'payement'])->find($reservationId);
+            if ($type === 'checkout.session.completed' && ($object->payment_status ?? null) === 'paid') {
+                $offerId = $object->metadata->offer_id ?? null;
+                $offer = $offerId ? Offer::find($offerId) : null;
+                if ($offer) {
+                    $paymentIntentId = is_string($object->payment_intent ?? null)
+                        ? $object->payment_intent
+                        : (string) ($object->payment_intent->id ?? '');
+                    $this->packPayments->completeOfferPayment(
+                        $offer,
+                        $paymentIntentId,
+                        (int) ($object->amount_total ?? 0),
+                        (string) ($object->currency ?? $offer->currency)
+                    );
+                }
+            }
 
-                if ($reservation) {
+            if ($type === 'payment_intent.succeeded') {
+                $intent = $object;
+                $offerId = $intent->metadata->offer_id ?? null;
+                $reservationId = $intent->metadata->reservation_id ?? null;
+
+                if ($offerId && ($offer = Offer::find($offerId))) {
+                    $this->packPayments->completeOfferPayment(
+                        $offer,
+                        (string) $intent->id,
+                        (int) ($intent->amount_received ?: $intent->amount),
+                        (string) $intent->currency,
+                        is_string($intent->latest_charge ?? null) ? $intent->latest_charge : null
+                    );
+                } elseif ($reservationId && ($reservation = Reservation::find($reservationId))) {
                     if ($mismatch = $this->paymentIntentMismatch($reservation, $intent)) {
-                        Log::warning('Échec Stripe ignoré pour un Payment Intent incohérent', $mismatch);
-                    } else {
+                        Log::critical('Paiement Stripe incohérent refusé', $mismatch);
+                        throw new \RuntimeException('Paiement Stripe incohérent pour la réservation.');
+                    }
+                    $this->completeSuccessfulPayment($reservation, $intent);
+                }
+            }
+
+            if ($type === 'payment_intent.payment_failed') {
+                $reservationId = $object->metadata->reservation_id ?? null;
+                if ($reservationId && ($reservation = Reservation::with(['client', 'intervenant', 'annonce', 'payement'])->find($reservationId))) {
+                    if (! $this->paymentIntentMismatch($reservation, $object)) {
                         $this->markPaymentAsFailed($reservation);
                     }
                 }
             }
-        }
 
-        if (in_array(($event->type ?? null), ['charge.dispute.created', 'charge.dispute.closed'], true)) {
-            $dispute = $event->data->object;
-            $payment = Payement::where('stripe_charge_id', $dispute->charge ?? null)->first();
+            if ($type === 'charge.refunded') {
+                $paymentIntentId = is_string($object->payment_intent ?? null)
+                    ? $object->payment_intent
+                    : (string) ($object->payment_intent->id ?? '');
+                if ($paymentIntentId) {
+                    $this->packPayments->reconcileRefund($paymentIntentId, (int) ($object->amount_refunded ?? 0));
+                }
+            }
 
-            if ($payment && $payment->reservation) {
-                $status = ($event->type === 'charge.dispute.created') ? 'disputed' : 'paid';
+            if (in_array($type, ['charge.dispute.created', 'charge.dispute.closed'], true)) {
+                $payment = Payement::where('stripe_charge_id', $object->charge ?? null)->first();
+                if ($payment?->reservation) {
+                    $status = $type === 'charge.dispute.created' ? 'disputed' : 'paid';
+                    $payment->reservation->update([
+                        'prestation_status' => $status,
+                        'payout_status' => $status === 'disputed' ? 'blocked' : $payment->reservation->payout_status,
+                        'disputed_at' => $status === 'disputed' ? now() : $payment->reservation->disputed_at,
+                        'dispute_reason' => $status === 'disputed' ? 'Litige Stripe ouvert' : $payment->reservation->dispute_reason,
+                    ]);
+                }
+                if ($payment?->pack) {
+                    $payment->pack->update(['status' => $type === 'charge.dispute.created' ? 'disputed' : 'active']);
+                }
+            }
 
-                $payment->reservation->update([
-                    'prestation_status' => $status,
-                    'payout_status' => $status === 'disputed' ? 'blocked' : $payment->reservation->payout_status,
-                    'disputed_at' => $status === 'disputed' ? now() : $payment->reservation->disputed_at,
-                    'dispute_reason' => $status === 'disputed' ? 'Litige Stripe ouvert' : $payment->reservation->dispute_reason,
+            if ($type === 'account.updated') {
+                User::where('stripe_account_id', $object->id)->update([
+                    'stripe_onboarding_completed' => (bool) (($object->charges_enabled ?? false) && ($object->payouts_enabled ?? false)),
                 ]);
             }
+
+            if (in_array($type, ['transfer.created', 'transfer.updated'], true)) {
+                PackPayout::where('stripe_transfer_id', $object->id)->update([
+                    'status' => 'paid',
+                    'transferred_at' => now(),
+                ]);
+            }
+
+            $eventRecord->update(['status' => 'processed', 'processed_at' => now(), 'error' => null]);
+        } catch (\Throwable $e) {
+            $eventRecord->update(['status' => 'failed', 'error' => $e->getMessage()]);
+            Log::error('Traitement du webhook Stripe impossible', [
+                'event_id' => $event->id,
+                'type' => $event->type,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json(['error' => 'Traitement du webhook impossible'], 500);
         }
 
         return response()->json(['success' => true]);

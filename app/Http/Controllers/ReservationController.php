@@ -8,6 +8,7 @@ use App\Models\Reservation;
 use App\Models\ReservationRescheduleHistory;
 use App\Models\User;
 use App\Notifications\ReservationStatusNotification;
+use App\Support\AnnonceAvailability;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -218,6 +219,12 @@ class ReservationController extends Controller
             }
 
             $annonce = Annonce::query()->lockForUpdate()->findOrFail($reservation->annonce_id);
+            // Les anciennes annonces déjà réservées peuvent ne pas avoir de
+            // disponibilités structurées. Dès qu'un planning est publié, la
+            // replanification doit toutefois le respecter strictement.
+            if (($annonce->available_days ?? []) !== [] || ($annonce->available_hours ?? []) !== []) {
+                AnnonceAvailability::assertAvailable($annonce, $data['reservation_date'], $time);
+            }
             User::query()->lockForUpdate()->findOrFail($reservation->intervenant_id);
             $maxParticipants = max(
                 1,

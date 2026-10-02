@@ -30,6 +30,8 @@ return [
         'secret' => env('STRIPE_SECRET'),
         'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
         'validation_delay_hours' => env('STRIPE_VALIDATION_DELAY_HOURS', 72),
+        'pack_validation_delay_hours' => env('STRIPE_PACK_VALIDATION_DELAY_HOURS', 48),
+        'frontend_url' => env('FRONTEND_URL', 'https://gotfit.tech'),
     ],
 
     'google' => [

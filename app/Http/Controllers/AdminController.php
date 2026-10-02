@@ -9,7 +9,7 @@ use App\Models\Reservation;
 use App\Models\Review;
 use App\Models\Role;
 use App\Models\User;
-use App\Notifications\CoachAccountApprovedNotification;
+use App\Notifications\CoachApprovedNotification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -640,6 +640,7 @@ class AdminController extends Controller
             default => 'pending',
         };
     }
+
     private function notifyCoachApprovedIfNeeded(User $user, ?string $previousStatus): bool
     {
         if (
@@ -652,7 +653,7 @@ class AdminController extends Controller
         }
 
         try {
-            $user->notify(new CoachAccountApprovedNotification());
+            $user->notify(new CoachApprovedNotification);
 
             return true;
         } catch (\Throwable $e) {
@@ -664,5 +665,4 @@ class AdminController extends Controller
             return false;
         }
     }
-
 }

@@ -406,15 +406,15 @@ class AnnonceController extends Controller
 
     private function validateCoachOffer(Request $request, bool $required = true): void
     {
-        $presence = $required ? 'required' : 'sometimes|required';
+        $presence = $required ? ['required'] : ['sometimes', 'required'];
 
         $request->validate([
-            'price' => [$presence, 'numeric', 'min:0.01'],
-            'duration' => [$presence, 'integer', 'min:15', 'max:480'],
-            'max_participants' => [$presence, 'integer', 'min:1', 'max:'.Annonce::MAX_PARTICIPANTS],
-            'available_days' => [$presence, 'array', 'min:1'],
+            'price' => [...$presence, 'numeric', 'min:0.01'],
+            'duration' => [...$presence, 'integer', 'min:15', 'max:480'],
+            'max_participants' => [...$presence, 'integer', 'min:1', 'max:'.Annonce::MAX_PARTICIPANTS],
+            'available_days' => [...$presence, 'array', 'min:1'],
             'available_days.*' => ['string', 'in:monday,tuesday,wednesday,thursday,friday,saturday,sunday'],
-            'available_hours' => [$presence, 'array', 'min:1'],
+            'available_hours' => [...$presence, 'array', 'min:1'],
             'available_hours.*' => ['string', 'regex:/^(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d$/'],
         ], [
             'price.required' => 'Indiquez le prix de la prestation.',

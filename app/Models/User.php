@@ -249,4 +249,19 @@ class User extends Authenticatable
     {
         return $this->hasMany(PushToken::class);
     }
+
+    public function offersAsCoach(): HasMany
+    {
+        return $this->hasMany(Offer::class, 'coach_id');
+    }
+
+    public function offersAsClient(): HasMany
+    {
+        return $this->hasMany(Offer::class, 'client_id');
+    }
+
+    public function wallet()
+    {
+        return $this->hasOne(Wallet::class);
+    }
 }

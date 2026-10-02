@@ -82,6 +82,7 @@ class MessageController extends Controller
                     'sender',
                     'parent.sender',
                     'reactions.user',
+                    'offer.pack.sessions',
                 ])
                     ->latest()
                     ->limit(1);
@@ -171,6 +172,7 @@ class MessageController extends Controller
             'sender',
             'parent.sender',
             'reactions.user',
+            'offer.pack.sessions',
         ])
             ->where('conversation_id', $conversation_id)
             ->orderBy('created_at', 'asc')
@@ -272,6 +274,7 @@ class MessageController extends Controller
             'sender',
             'parent.sender',
             'reactions.user',
+            'offer.pack.sessions',
         ]);
 
         $recipientId = (int) $conversation->client_id === (int) Auth::id()

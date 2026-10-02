@@ -13,6 +13,8 @@ class Payement extends Model
 
     protected $fillable = [
         'reservation_id',
+        'offer_id',
+        'pack_id',
         'payment_intent_id',
         'stripe_charge_id',
         'stripe_transfer_id',
@@ -43,6 +45,16 @@ class Payement extends Model
     public function reservation()
     {
         return $this->belongsTo(Reservation::class);
+    }
+
+    public function offer()
+    {
+        return $this->belongsTo(Offer::class);
+    }
+
+    public function pack()
+    {
+        return $this->belongsTo(Pack::class);
     }
 
     public function client()

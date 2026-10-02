@@ -22,6 +22,7 @@ class Message extends Model
         'conversation_id',
         'sender_id',
         'receiver_id',
+        'offer_id',
         'parent_id',
         'subject',
         'message',
@@ -114,6 +115,11 @@ class Message extends Model
     public function reactions()
     {
         return $this->hasMany(MessageReaction::class, 'message_id');
+    }
+
+    public function offer()
+    {
+        return $this->belongsTo(Offer::class);
     }
 
     /**
