@@ -61,6 +61,12 @@ un second paiement.
 Le statut payé et le pack sont créés uniquement par webhook Stripe, jamais sur
 la seule base du retour frontend.
 
+La webapp utilise une étape de récapitulatif interne avant Stripe :
+`/offres/{id}/paiement`. Le client peut y contacter le coach, choisir le montant
+de cagnotte à appliquer puis ouvrir Checkout. Après Stripe, les URLs de retour
+ramènent vers `/messages?conversation_id=...` afin de rouvrir la conversation
+existante (et non vers une route dynamique inexistante).
+
 ### Suivre le pack et les séances
 
 - `GET /api/packs`

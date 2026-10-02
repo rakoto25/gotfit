@@ -14,14 +14,12 @@ class StripeMarketplaceService
     {
         Stripe::setApiKey((string) config('services.stripe.secret'));
 
-        $frontendUrl = rtrim((string) config('services.stripe.frontend_url'), '/');
+        $returnUrls = $this->offerReturnUrls($offer);
 
         $data = [
             'mode' => 'payment',
-            'success_url' => $frontendUrl.'/messages/'.$offer->conversation_id
-                .'?offer='.$offer->id.'&payment=success&session_id={CHECKOUT_SESSION_ID}',
-            'cancel_url' => $frontendUrl.'/messages/'.$offer->conversation_id
-                .'?offer='.$offer->id.'&payment=cancelled',
+            'success_url' => $returnUrls['success_url'],
+            'cancel_url' => $returnUrls['cancel_url'],
             'line_items' => [[
                 'quantity' => 1,
                 'price_data' => [
@@ -79,6 +77,18 @@ class StripeMarketplaceService
         return Transfer::create($data, [
             'idempotency_key' => 'pack_session_'.$session->id.'_transfer_v1',
         ]);
+    }
+
+    public function offerReturnUrls(Offer $offer): array
+    {
+        $frontendUrl = rtrim((string) config('services.stripe.frontend_url'), '/');
+        $query = 'conversation_id='.$offer->conversation_id.'&offer='.$offer->id;
+
+        return [
+            'success_url' => $frontendUrl.'/messages?'.$query
+                .'&payment=success&session_id={CHECKOUT_SESSION_ID}',
+            'cancel_url' => $frontendUrl.'/messages?'.$query.'&payment=cancelled',
+        ];
     }
 
     private function offerMetadata(Offer $offer): array
