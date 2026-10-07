@@ -14,6 +14,7 @@ use App\Http\Controllers\FitnessAssessmentController;
 use App\Http\Controllers\ForumController;
 use App\Http\Controllers\ForumModerationController;
 use App\Http\Controllers\InscriptionController;
+use App\Http\Controllers\LegalDocumentController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\MissionController;
 use App\Http\Controllers\PackController;
@@ -152,6 +153,9 @@ Route::get('/visio/sessions/{id}', [VisioSessionController::class, 'show'])->mid
 
 Route::post('/contact', [ContactController::class, 'send'])
     ->middleware('throttle:5,1');
+
+Route::get('/legal-documents', [LegalDocumentController::class, 'index']);
+Route::get('/legal-documents/{slug}', [LegalDocumentController::class, 'show']);
 
 /*
 |--------------------------------------------------------------------------
@@ -410,6 +414,9 @@ Route::middleware(['auth:sanctum', 'forum_access'])->group(function () {
 */
 
 Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
+    Route::get('/admin/legal-documents', [LegalDocumentController::class, 'adminIndex']);
+    Route::put('/admin/legal-documents/{legalDocument}', [LegalDocumentController::class, 'update'])
+        ->whereNumber('legalDocument');
     Route::post('/admin/pack-sessions/{session}/resolve', [PackController::class, 'resolveSession'])
         ->whereNumber('session');
     /*
