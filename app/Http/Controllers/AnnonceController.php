@@ -135,7 +135,7 @@ class AnnonceController extends Controller
         $user_id = $user->id;
         $annonce = Annonce::findOrFail($id);
 
-        if ((int) $annonce->user_id !== (int) $user_id) {
+        if (! $user->hasRole('admin') && (int) $annonce->user_id !== (int) $user_id) {
             return response()->json(['status' => 403, 'message' => 'Non autorisé'], 403);
         }
 
@@ -145,7 +145,10 @@ class AnnonceController extends Controller
             $this->validateCoachOffer($request, false);
         }
 
-        $data['status'] = 'en_attente';
+        // Une correction éditoriale faite par l'administration ne doit pas
+        // dépublier une annonce déjà validée. Une modification par son auteur
+        // repasse en revanche toujours par la file de modération.
+        $data['status'] = $user->hasRole('admin') ? $annonce->status : 'en_attente';
         $data['announcement_type'] = $annonce->announcement_type
             ?: ($user->hasRole('client') ? 'client_request' : 'coach_service');
 

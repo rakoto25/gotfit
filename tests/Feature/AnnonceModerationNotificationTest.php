@@ -78,4 +78,24 @@ class AnnonceModerationNotificationTest extends TestCase
                 && str_ends_with($mail->actionUrl, '/annonces/mes-annonces');
         });
     }
+
+    public function test_admin_can_edit_a_validated_announcement_without_unpublishing_it(): void
+    {
+        $owner = $this->member('intervenant');
+        $annonce = $this->pendingAnnonce($owner);
+        $annonce->update(['status' => 'valide']);
+        Sanctum::actingAs($this->member('admin'));
+
+        $this->putJson("/api/annonces/{$annonce->id}", [
+            'titre' => 'Titre corrigé par la modération',
+        ])->assertOk()
+            ->assertJsonPath('annonce.titre', 'Titre corrigé par la modération')
+            ->assertJsonPath('annonce.status', 'valide');
+
+        $this->assertDatabaseHas('annonces', [
+            'id' => $annonce->id,
+            'titre' => 'Titre corrigé par la modération',
+            'status' => 'valide',
+        ]);
+    }
 }
