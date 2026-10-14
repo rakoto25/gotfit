@@ -66,6 +66,34 @@ class VisioParticipantLimitTest extends TestCase
             ->assertJsonValidationErrors('max_participants');
     }
 
+    public function test_session_stops_at_the_capacity_selected_by_the_coach(): void
+    {
+        $coach = $this->userWithRole('intervenant');
+        $clients = collect(range(1, 3))->map(fn () => $this->userWithRole('client'));
+
+        Sanctum::actingAs($coach);
+        $creation = $this->postJson('/api/visio/sessions', [
+            'title' => 'Duo mobilité',
+            'start_at' => now()->addDay()->toIso8601String(),
+            'min_participants' => 1,
+            'max_participants' => 2,
+        ])->assertCreated();
+
+        $sessionId = $creation->json('session.id');
+
+        Sanctum::actingAs($clients[0]);
+        $this->postJson("/api/visio/sessions/{$sessionId}/reserve")->assertCreated();
+
+        Sanctum::actingAs($clients[1]);
+        $this->postJson("/api/visio/sessions/{$sessionId}/reserve")->assertCreated();
+
+        Sanctum::actingAs($clients[2]);
+        $this->postJson("/api/visio/sessions/{$sessionId}/reserve")
+            ->assertUnprocessable();
+
+        $this->assertDatabaseCount('visio_participants', 3);
+    }
+
     public function test_paid_client_and_coach_can_access_a_future_session_immediately(): void
     {
         config([

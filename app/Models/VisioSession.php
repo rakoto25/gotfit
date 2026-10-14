@@ -9,9 +9,7 @@ class VisioSession extends Model
 {
     use HasFactory;
 
-    public const MAX_CLIENT_PARTICIPANTS_V1 = 4;
-
-    public const MAX_ATTENDEES_V1 = 5;
+    public const MAX_CLIENT_PARTICIPANTS = 4;
 
     protected $fillable = [
         'reservation_id',
@@ -117,10 +115,10 @@ class VisioSession extends Model
     public function getEffectiveMaxParticipantsAttribute(): int
     {
         if (! $this->max_participants) {
-            return self::MAX_CLIENT_PARTICIPANTS_V1;
+            return self::MAX_CLIENT_PARTICIPANTS;
         }
 
-        return min($this->max_participants, self::MAX_CLIENT_PARTICIPANTS_V1);
+        return min($this->max_participants, self::MAX_CLIENT_PARTICIPANTS);
     }
 
     public function getMaxAttendeesAttribute(): int

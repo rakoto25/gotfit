@@ -110,7 +110,7 @@ class VisioSessionController extends Controller
         ]);
 
         $minParticipants = (int) ($data['min_participants'] ?? 1);
-        $maxParticipants = (int) ($data['max_participants'] ?? VisioSession::MAX_CLIENT_PARTICIPANTS_V1);
+        $maxParticipants = (int) ($data['max_participants'] ?? VisioSession::MAX_CLIENT_PARTICIPANTS);
 
         if ($maxParticipants !== null && $maxParticipants < $minParticipants) {
             return response()->json([
@@ -314,7 +314,7 @@ class VisioSessionController extends Controller
             ) {
                 if ($lockedSession->available_places <= 0) {
                     throw ValidationException::withMessages([
-                        'session' => ['Cette séance visio est complète (quatre coachés maximum).'],
+                        'session' => ['Cette séance visio a atteint le nombre de places défini par l’intervenant.'],
                     ]);
                 }
             }
