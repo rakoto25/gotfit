@@ -20,7 +20,17 @@ class CoachApprovedNotification extends Notification implements ShouldQueue
 
     public function via(object $notifiable): array
     {
-        return ['mail'];
+        return ['mail', 'database'];
+    }
+
+    public function toArray(object $notifiable): array
+    {
+        return [
+            'type' => 'coach_account',
+            'title' => 'Compte coach validé',
+            'body' => 'Votre compte coach a été vérifié. Vous pouvez maintenant publier vos annonces.',
+            'url' => '/intervenant/dashboard',
+        ];
     }
 
     public function toMail(object $notifiable): MailMessage

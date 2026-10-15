@@ -17,6 +17,7 @@ use App\Http\Controllers\InscriptionController;
 use App\Http\Controllers\LegalDocumentController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\MissionController;
+use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\PackController;
 use App\Http\Controllers\PayementController;
 use App\Http\Controllers\ProfileController;
@@ -184,6 +185,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [ConnexionController::class, 'logout']);
     Route::post('/push-tokens', [PushTokenController::class, 'store']);
     Route::delete('/push-tokens', [PushTokenController::class, 'destroy']);
+
+    Route::get('/notifications', [NotificationController::class, 'index']);
+    Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
+    Route::put('/notifications/read-all', [NotificationController::class, 'markAllAsRead']);
+    Route::put('/notifications/{notificationId}/read', [NotificationController::class, 'markAsRead']);
+    Route::delete('/notifications/{notificationId}', [NotificationController::class, 'destroy']);
 
     Route::get('/profile', [ProfileController::class, 'show']);
     Route::post('/profile', [ProfileController::class, 'update']);

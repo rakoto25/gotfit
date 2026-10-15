@@ -12,7 +12,17 @@ class CoachAccountApprovedNotification extends Notification
 
     public function via(object $notifiable): array
     {
-        return ['mail'];
+        return ['mail', 'database'];
+    }
+
+    public function toArray(object $notifiable): array
+    {
+        return [
+            'type' => 'coach_account',
+            'title' => 'Compte coach vérifié',
+            'body' => 'Votre compte coach est validé. Votre espace professionnel est disponible.',
+            'url' => '/intervenant/dashboard',
+        ];
     }
 
     public function toMail(object $notifiable): MailMessage

@@ -7,6 +7,7 @@ use App\Models\Conversations;
 use App\Models\Message;
 use App\Models\MessageReaction;
 use App\Models\User;
+use App\Notifications\ChatMessageNotification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Schema;
@@ -283,6 +284,8 @@ class MessageController extends Controller
         $recipient = User::find($recipientId);
 
         if ($recipient) {
+            $recipient->notify(new ChatMessageNotification($message));
+
             SendExpoPushNotification::dispatch(
                 $recipient->id,
                 $message->sender?->name ?: 'Nouveau message Gotfit',
@@ -307,7 +310,7 @@ class MessageController extends Controller
     {
         $request->validate([
             'message' => 'nullable|string|max:5000',
-            'media' => 'nullable|image|mimes:jpg,jpeg,png,webp,gif|max:8192',
+            'media' => 'nullable|file|mimes:jpg,jpeg,png,webp,gif,mp4,mov,avi,webm,mkv|max:51200',
             'remove_media' => 'nullable|boolean',
         ]);
 
@@ -325,11 +328,13 @@ class MessageController extends Controller
 
         if ($request->hasFile('media')) {
             $file = $request->file('media');
-            $newMedia = $file->store('messages/images', 'public');
+            $mime = $file->getMimeType();
+            $mediaType = str_starts_with($mime, 'video/') ? 'video' : 'image';
+            $newMedia = $file->store('messages/'.$mediaType.'s', 'public');
             $previousMedia = $message->media_url;
             $message->media_url = $newMedia;
-            $message->media_type = 'image';
-            $message->type = $request->filled('message') ? 'mixed' : 'image';
+            $message->media_type = $mediaType;
+            $message->type = $request->filled('message') ? 'mixed' : $mediaType;
         } elseif ($request->boolean('remove_media')) {
             $previousMedia = $message->media_url;
             $message->media_url = null;

@@ -18,7 +18,25 @@ class AnnonceStatusNotification extends Notification
 
     public function via(object $notifiable): array
     {
-        return ['mail'];
+        return ['mail', 'database'];
+    }
+
+    public function toArray(object $notifiable): array
+    {
+        $published = $this->status === 'valide';
+
+        return [
+            'type' => 'annonce',
+            'title' => $published ? 'Annonce publiée' : 'Annonce à modifier',
+            'body' => $published
+                ? 'Votre annonce « '.$this->annonce->titre.' » est maintenant visible.'
+                : 'Votre annonce « '.$this->annonce->titre.' » n’a pas été publiée.',
+            'url' => $published
+                ? '/annonces/'.$this->annonce->id
+                : '/annonces/mes-annonces',
+            'annonce_id' => $this->annonce->id,
+            'status' => $this->status,
+        ];
     }
 
     public function toMail(object $notifiable): MailMessage

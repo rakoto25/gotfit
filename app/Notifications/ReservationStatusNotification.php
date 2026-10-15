@@ -19,7 +19,19 @@ class ReservationStatusNotification extends Notification
 
     public function via(object $notifiable): array
     {
-        return ['mail'];
+        return ['mail', 'database'];
+    }
+
+    public function toArray(object $notifiable): array
+    {
+        return [
+            'type' => 'reservation',
+            'title' => $this->subject(),
+            'body' => $this->customMessage ?: $this->message(),
+            'url' => '/reservations?reservation='.$this->reservation->id,
+            'reservation_id' => $this->reservation->id,
+            'event' => $this->event,
+        ];
     }
 
     public function toMail(object $notifiable): MailMessage

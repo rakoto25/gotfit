@@ -5,7 +5,9 @@ namespace Tests\Feature;
 use App\Models\Conversations;
 use App\Models\Message;
 use App\Models\User;
+use App\Notifications\ChatMessageNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Notifications\DatabaseNotification;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -101,6 +103,41 @@ class MessagingSyncTest extends TestCase
             ->assertJsonPath('deleted', true);
 
         $this->assertDatabaseMissing('push_tokens', ['token' => $token]);
+    }
+
+    public function test_message_creates_an_in_app_notification_that_the_recipient_can_manage(): void
+    {
+        [$client, $coach, $conversation] = $this->conversation();
+        Sanctum::actingAs($client);
+
+        $this->postJson("/api/message/{$conversation->id}", [
+            'message' => 'Bonjour coach',
+        ])->assertOk();
+
+        $notification = DatabaseNotification::query()
+            ->where('notifiable_id', $coach->id)
+            ->where('type', ChatMessageNotification::class)
+            ->firstOrFail();
+
+        Sanctum::actingAs($coach);
+
+        $this->getJson('/api/notifications')
+            ->assertOk()
+            ->assertJsonPath('unread_count', 1)
+            ->assertJsonPath('notifications.0.data.type', 'message')
+            ->assertJsonPath('notifications.0.data.conversation_id', $conversation->id);
+
+        $this->putJson("/api/notifications/{$notification->id}/read")
+            ->assertOk()
+            ->assertJsonPath('notification.id', $notification->id);
+
+        $this->getJson('/api/notifications/unread-count')
+            ->assertOk()
+            ->assertJsonPath('unread_count', 0);
+
+        $this->deleteJson("/api/notifications/{$notification->id}")
+            ->assertOk()
+            ->assertJsonPath('deleted', true);
     }
 
     private function conversation(): array
