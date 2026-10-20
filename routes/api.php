@@ -5,6 +5,7 @@ use App\Http\Controllers\AdminMessageController;
 use App\Http\Controllers\AnnonceController;
 use App\Http\Controllers\ChatOfferController;
 use App\Http\Controllers\ClientJourneyController;
+use App\Http\Controllers\CoachFavoriteController;
 use App\Http\Controllers\CoachForumController;
 use App\Http\Controllers\ConnexionController;
 use App\Http\Controllers\ContactController;
@@ -218,6 +219,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/favorites/{annonce}', [FavoriteController::class, 'store'])->whereNumber('annonce');
     Route::delete('/favorites/annonce/{annonce}', [FavoriteController::class, 'destroyByAnnonce'])->whereNumber('annonce');
     Route::delete('/favorites/{id}', [FavoriteController::class, 'destroy'])->whereNumber('id');
+
+    Route::get('/coach-favorites', [CoachFavoriteController::class, 'index']);
+    Route::post('/coach-favorites/{coach}', [CoachFavoriteController::class, 'store'])->whereNumber('coach');
+    Route::delete('/coach-favorites/{coach}', [CoachFavoriteController::class, 'destroy'])->whereNumber('coach');
 
     /*
     |--------------------------------------------------------------------------

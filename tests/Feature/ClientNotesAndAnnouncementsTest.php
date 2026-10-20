@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Annonce;
+use App\Models\Reservation;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -50,6 +51,42 @@ class ClientNotesAndAnnouncementsTest extends TestCase
         ])
             ->assertUnprocessable()
             ->assertJsonValidationErrors('intervenant_id');
+    }
+
+    public function test_coach_can_share_a_note_with_the_client_or_keep_it_private(): void
+    {
+        $client = $this->userWithRole('client');
+        $coach = $this->userWithRole('intervenant');
+
+        Reservation::create([
+            'client_id' => $client->id,
+            'intervenant_id' => $coach->id,
+            'reservation_date' => now()->addDay()->toDateString(),
+            'reservation_time' => '10:00',
+            'status' => 'confirme',
+        ]);
+
+        Sanctum::actingAs($coach);
+
+        $this->postJson("/api/clients/{$client->id}/notes", [
+            'visibility' => 'shared',
+            'title' => 'À retenir',
+            'content' => 'Hydratation et récupération après la séance.',
+        ])->assertCreated();
+
+        $this->postJson("/api/clients/{$client->id}/notes", [
+            'visibility' => 'private',
+            'title' => 'Suivi coach',
+            'content' => 'Observation réservée au coach.',
+        ])->assertCreated();
+
+        Sanctum::actingAs($client);
+
+        $this->getJson("/api/clients/{$client->id}/notes")
+            ->assertOk()
+            ->assertJsonCount(1, 'notes')
+            ->assertJsonPath('notes.0.visibility', 'shared')
+            ->assertJsonPath('notes.0.title', 'À retenir');
     }
 
     public function test_client_can_publish_a_coach_request(): void

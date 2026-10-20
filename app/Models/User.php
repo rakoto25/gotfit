@@ -204,6 +204,16 @@ class User extends Authenticatable
         return $this->hasMany(ClientNote::class, 'author_id');
     }
 
+    public function coachFavorites(): HasMany
+    {
+        return $this->hasMany(CoachFavorite::class, 'user_id');
+    }
+
+    public function favoredByClients(): HasMany
+    {
+        return $this->hasMany(CoachFavorite::class, 'coach_id');
+    }
+
     public function coachForumPosts(): HasMany
     {
         return $this->hasMany(CoachForumPost::class);
