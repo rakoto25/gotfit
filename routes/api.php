@@ -1,7 +1,9 @@
 <?php
 
+use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminMessageController;
+use App\Http\Controllers\AdminSystemSettingController;
 use App\Http\Controllers\AnnonceController;
 use App\Http\Controllers\ChatOfferController;
 use App\Http\Controllers\ClientJourneyController;
@@ -22,6 +24,7 @@ use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\PackController;
 use App\Http\Controllers\PayementController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\PublicConfigController;
 use App\Http\Controllers\PushTokenController;
 use App\Http\Controllers\ReservationController;
 use App\Http\Controllers\ReviewController;
@@ -93,6 +96,13 @@ Route::post('/register', [InscriptionController::class, 'register'])
 Route::post('/login', [ConnexionController::class, 'login'])
     ->name('auth.login');
 
+Route::get('/admin/security/challenge', [AdminAuthController::class, 'challenge'])
+    ->middleware('throttle:30,1');
+
+Route::post('/admin/login', [AdminAuthController::class, 'login'])
+    ->middleware('throttle:5,1')
+    ->name('admin.login');
+
 Route::post('/forgot-password', [ConnexionController::class, 'forgotPassword'])
     ->name('auth.forgot-password');
 
@@ -120,6 +130,7 @@ Route::post('/auth/google', [SocialAuthController::class, 'google'])
 
 Route::get('/annonces', [AnnonceController::class, 'index']);
 Route::get('/annonces/{id}/detail', [AnnonceController::class, 'detailAnnonce'])->whereNumber('id');
+Route::get('/public-config', PublicConfigController::class)->middleware('throttle:60,1');
 
 /*
 |--------------------------------------------------------------------------
@@ -426,6 +437,9 @@ Route::middleware(['auth:sanctum', 'forum_access'])->group(function () {
 */
 
 Route::middleware(['auth:sanctum', 'is_admin'])->group(function () {
+    Route::get('/admin/system-settings', [AdminSystemSettingController::class, 'index']);
+    Route::put('/admin/system-settings', [AdminSystemSettingController::class, 'update']);
+    Route::delete('/admin/system-settings/{key}', [AdminSystemSettingController::class, 'destroy']);
     Route::get('/admin/legal-documents', [LegalDocumentController::class, 'adminIndex']);
     Route::put('/admin/legal-documents/{legalDocument}', [LegalDocumentController::class, 'update'])
         ->whereNumber('legalDocument');

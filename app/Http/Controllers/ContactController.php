@@ -22,7 +22,7 @@ class ContactController extends Controller
                 'message' => ['required', 'string', 'min:10', 'max:3000'],
             ]);
 
-            $to = env('CONTACT_MAIL_TO', env('MAIL_FROM_ADDRESS'));
+            $to = config('services.contact.to', config('mail.from.address'));
 
             Mail::to($to)->send(new ContactFormMail($validated));
 

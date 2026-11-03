@@ -12,6 +12,8 @@ réservations, les visios, la messagerie et l'administration.
 
 ## Installation locale
 
+Prérequis : PHP 8.2 ou supérieur et PostgreSQL.
+
 ```bash
 composer install
 cp .env.example .env
@@ -22,6 +24,28 @@ php artisan serve
 ```
 
 L'API est alors disponible sur `http://localhost:8000/api`.
+
+## Configuration sécurisée depuis l’administration
+
+La console d’administration permet de gérer Turnstile, Stripe, SMTP/Gmail,
+Google OAuth, LiveKit et l’URL publique. Les valeurs sensibles sont chiffrées
+dans PostgreSQL avec `APP_KEY` et ne sont jamais renvoyées à l’interface.
+
+`APP_KEY`, `APP_ENV`, la connexion PostgreSQL, les caches, les files de travaux
+et les paramètres nécessaires au démarrage restent dans l’environnement du
+serveur. Ils ne peuvent pas être stockés dans une base qui en dépend.
+
+Pour activer la fonctionnalité après déploiement :
+
+```bash
+php artisan migrate --force
+php artisan optimize:clear
+php artisan optimize
+```
+
+Configurer d’abord les deux clés Turnstile, enregistrer, puis activer
+Turnstile. La connexion admin utilise alors `/api/admin/login`, valide le défi
+côté serveur et limite les tentatives à cinq par minute.
 
 ## Inscription par formulaire
 

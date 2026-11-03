@@ -424,7 +424,7 @@ class PayementController extends Controller
             $account = Account::create([
                 'type' => 'express',
                 'email' => $user->email,
-                'country' => env('STRIPE_CONNECT_COUNTRY', 'FR'),
+                'country' => config('services.stripe.connect_country', 'FR'),
                 'capabilities' => [
                     'card_payments' => ['requested' => true],
                     'transfers' => ['requested' => true],
