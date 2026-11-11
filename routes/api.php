@@ -91,9 +91,11 @@ if (config('app.debug')) {
 */
 
 Route::post('/register', [InscriptionController::class, 'register'])
+    ->middleware(\App\Http\Middleware\VerifyPublicTurnstile::class)
     ->name('auth.register');
 
 Route::post('/login', [ConnexionController::class, 'login'])
+    ->middleware(\App\Http\Middleware\VerifyPublicTurnstile::class)
     ->name('auth.login');
 
 Route::get('/admin/security/challenge', [AdminAuthController::class, 'challenge'])
@@ -104,9 +106,11 @@ Route::post('/admin/login', [AdminAuthController::class, 'login'])
     ->name('admin.login');
 
 Route::post('/forgot-password', [ConnexionController::class, 'forgotPassword'])
+    ->middleware(\App\Http\Middleware\VerifyPublicTurnstile::class)
     ->name('auth.forgot-password');
 
 Route::post('/reset-password', [ConnexionController::class, 'resetPassword'])
+    ->middleware(\App\Http\Middleware\VerifyPublicTurnstile::class)
     ->name('auth.reset-password');
 
 /*
@@ -165,6 +169,7 @@ Route::get('/visio/sessions/{id}', [VisioSessionController::class, 'show'])->mid
 */
 
 Route::post('/contact', [ContactController::class, 'send'])
+    ->middleware(\App\Http\Middleware\VerifyPublicTurnstile::class)
     ->middleware('throttle:5,1');
 
 Route::get('/legal-documents', [LegalDocumentController::class, 'index']);
@@ -612,7 +617,9 @@ Route::middleware(['auth:sanctum', 'is_intervenant'])->group(function () {
 */
 
 Route::middleware(['auth:sanctum', 'is_client'])->group(function () {
-    Route::put('/annonces/{id}/reserve', [AnnonceController::class, 'reserver'])->whereNumber('id');
+    Route::put('/annonces/{id}/reserve', [AnnonceController::class, 'reserver'])
+        ->middleware(\App\Http\Middleware\VerifyPublicTurnstile::class)
+        ->whereNumber('id');
 
     Route::get('/reservation/client', [ReservationController::class, 'getReservationByClient']);
     Route::match(['put', 'post'], '/reservation/{id}/reschedule', [ReservationController::class, 'reschedule'])
