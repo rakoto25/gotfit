@@ -31,21 +31,22 @@ return new class extends Migration
                 'attente',
                 'confirme',
                 'refuse',
-                'realise'
+                'annule',
+                'realise',
             ])->default('attente');
 
             $table->timestamps();
 
             // Foreign keys (si tu as les tables users ou intervenants)
             $table->foreign('client_id')
-                  ->references('id')
-                  ->on('users')
-                  ->onDelete('cascade');
+                ->references('id')
+                ->on('users')
+                ->onDelete('cascade');
 
             $table->foreign('intervenant_id')
-                  ->references('id')
-                  ->on('users')
-                  ->onDelete('cascade');
+                ->references('id')
+                ->on('users')
+                ->onDelete('cascade');
         });
     }
 

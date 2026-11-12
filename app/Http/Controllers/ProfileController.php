@@ -254,7 +254,6 @@ class ProfileController extends Controller
             $query->where(function ($statusQuery) {
                 $statusQuery
                     ->where('account_status', 'approved')
-                    ->orWhere('account_status', 'active')
                     ->orWhereNull('account_status');
             });
         }
