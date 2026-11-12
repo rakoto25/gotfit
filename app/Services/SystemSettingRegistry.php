@@ -41,7 +41,9 @@ class SystemSettingRegistry
             'MAIL_FROM_NAME' => $this->definition('E-mail / SMTP', 'Nom expéditeur', 'text', false, 'mail.from.name'),
             'CONTACT_MAIL_TO' => $this->definition('E-mail / SMTP', 'Destinataire du formulaire de contact', 'email', false, 'services.contact.to'),
 
-            'GOOGLE_CLIENT_ID' => $this->definition('Google', 'ID client Google OAuth', 'text', false, 'services.google.client_id'),
+            'GOOGLE_CLIENT_ID' => $this->definition('Google', 'ID client Google OAuth Web', 'text', false, 'services.google.client_id'),
+            'GOOGLE_ANDROID_CLIENT_ID' => $this->definition('Google', 'ID client Google OAuth Android', 'text', false, 'services.google.android_client_id'),
+            'GOOGLE_IOS_CLIENT_ID' => $this->definition('Google', 'ID client Google OAuth iOS', 'text', false, 'services.google.ios_client_id'),
             'GOOGLE_CLIENT_SECRET' => $this->definition('Google', 'Secret client Google OAuth', 'password', true, 'services.google.client_secret'),
 
             'VISIO_PROVIDER' => $this->definition('Visioconférence', 'Fournisseur', 'select', false, 'services.visio.provider', ['livekit']),

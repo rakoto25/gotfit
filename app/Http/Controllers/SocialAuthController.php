@@ -80,37 +80,38 @@ class SocialAuthController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        $configuredClientId = (string) config(
-            'services.google.client_id'
-        );
+        $configuredClientIds = [
+            (string) config('services.google.client_id'),
+            (string) config('services.google.android_client_id'),
+            (string) config('services.google.ios_client_id'),
+        ];
 
-        /*
-         * Retire les espaces, guillemets et chevrons qui auraient pu
-         * être copiés par erreur dans le fichier .env.
-         */
-        $clientId = trim(
-            $configuredClientId,
-            " \t\n\r\0\x0B\"'<>"
+        $normalizedClientIds = array_map(
+            static fn (string $value): string => trim($value, " \t\n\r\0\x0B\"'<>"),
+            $configuredClientIds
         );
+        $clientIds = array_values(array_unique(array_filter($normalizedClientIds)));
 
-        if ($clientId === '') {
+        if ($clientIds === []) {
             return response()->json([
-                'message' =>
-                    'La connexion Google n’est pas encore configurée sur le serveur.',
+                'message' => 'La connexion Google n’est pas encore configurée sur le serveur.',
             ], 503);
         }
 
-        if ($configuredClientId !== $clientId) {
-            Log::warning(
-                'Le Client ID Google contenait des caractères parasites.',
-                [
-                    'original_length' => strlen(
-                        $configuredClientId
-                    ),
+        $hasMalformedClientId = false;
+        foreach ($configuredClientIds as $index => $configuredClientId) {
+            if ($configuredClientId !== '' && $configuredClientId !== $normalizedClientIds[$index]) {
+                $hasMalformedClientId = true;
+                break;
+            }
+        }
 
-                    'normalized_length' => strlen(
-                        $clientId
-                    ),
+        if ($hasMalformedClientId) {
+            Log::warning(
+                'Un Client ID Google contenait des caractères parasites ou était vide.',
+                [
+                    'configured_count' => count(array_filter($configuredClientIds)),
+                    'normalized_count' => count($clientIds),
                 ]
             );
         }
@@ -134,8 +135,7 @@ class SocialAuthController extends Controller
                 ->get(
                     'https://oauth2.googleapis.com/tokeninfo',
                     [
-                        'id_token' =>
-                            $validated['credential'],
+                        'id_token' => $validated['credential'],
                     ]
                 );
         } catch (ConnectionException $exception) {
@@ -146,14 +146,12 @@ class SocialAuthController extends Controller
                         $exception
                     ),
 
-                    'message' =>
-                        $exception->getMessage(),
+                    'message' => $exception->getMessage(),
                 ]
             );
 
             return response()->json([
-                'message' =>
-                    'Google est momentanément indisponible. Veuillez réessayer.',
+                'message' => 'Google est momentanément indisponible. Veuillez réessayer.',
             ], 503);
         }
 
@@ -161,14 +159,12 @@ class SocialAuthController extends Controller
             Log::warning(
                 'Google a refusé le jeton d’identité.',
                 [
-                    'status' =>
-                        $googleResponse->status(),
+                    'status' => $googleResponse->status(),
                 ]
             );
 
             return response()->json([
-                'message' =>
-                    'Le jeton Google est invalide ou a expiré.',
+                'message' => 'Le jeton Google est invalide ou a expiré.',
             ], 401);
         }
 
@@ -178,14 +174,12 @@ class SocialAuthController extends Controller
             Log::warning(
                 'La réponse Google tokeninfo est incorrecte.',
                 [
-                    'status' =>
-                        $googleResponse->status(),
+                    'status' => $googleResponse->status(),
                 ]
             );
 
             return response()->json([
-                'message' =>
-                    'La réponse reçue de Google est invalide.',
+                'message' => 'La réponse reçue de Google est invalide.',
             ], 502);
         }
 
@@ -228,12 +222,10 @@ class SocialAuthController extends Controller
             $audiences = array_values(
                 array_filter(
                     array_map(
-                        static fn ($audience): string =>
-                            trim((string) $audience),
+                        static fn ($audience): string => trim((string) $audience),
                         $audienceClaim
                     ),
-                    static fn (string $audience): bool =>
-                        $audience !== ''
+                    static fn (string $audience): bool => $audience !== ''
                 )
             );
         } else {
@@ -264,16 +256,12 @@ class SocialAuthController extends Controller
         $audienceValid = false;
 
         foreach ($audiences as $audience) {
-            if (
-                $audience !== ''
-                && hash_equals(
-                    $clientId,
-                    $audience
-                )
-            ) {
-                $audienceValid = true;
+            foreach ($clientIds as $clientId) {
+                if ($audience !== '' && hash_equals($clientId, $audience)) {
+                    $audienceValid = true;
 
-                break;
+                    break 2;
+                }
             }
         }
 
@@ -311,67 +299,49 @@ class SocialAuthController extends Controller
             Log::warning(
                 'Échec vérification identité Google.',
                 [
-                    'has_required_claims' =>
-                        $hasRequiredClaims,
+                    'has_required_claims' => $hasRequiredClaims,
 
-                    'audience_valid' =>
-                        $audienceValid,
+                    'audience_valid' => $audienceValid,
 
-                    'issuer_valid' =>
-                        $issuerValid,
+                    'issuer_valid' => $issuerValid,
 
-                    'expiration_valid' =>
-                        $expirationValid,
+                    'expiration_valid' => $expirationValid,
 
-                    'email_verified' =>
-                        $emailVerified,
+                    'email_verified' => $emailVerified,
 
-                    'issuer' =>
-                        $issuer,
+                    'issuer' => $issuer,
 
-                    'expiration' =>
-                        $expiration,
+                    'expiration' => $expiration,
 
-                    'server_timestamp' =>
-                        $serverTimestamp,
+                    'server_timestamp' => $serverTimestamp,
 
-                    'expected_audience_length' =>
-                        strlen($clientId),
+                    'expected_audience_lengths' => array_map(strlen(...), $clientIds),
 
-                    'received_audience_lengths' =>
-                        array_map(
-                            static fn (
-                                string $audience
-                            ): int =>
-                                strlen($audience),
-                            $audiences
-                        ),
+                    'received_audience_lengths' => array_map(
+                        static fn (
+                            string $audience
+                        ): int => strlen($audience),
+                        $audiences
+                    ),
 
-                    'expected_audience_hash' =>
-                        substr(
+                    'expected_audience_hashes' => array_map(
+                        static fn (string $clientId): string => substr(hash('sha256', $clientId), 0, 16),
+                        $clientIds
+                    ),
+
+                    'received_audience_hashes' => array_map(
+                        static fn (
+                            string $audience
+                        ): string => substr(
                             hash(
                                 'sha256',
-                                $clientId
+                                $audience
                             ),
                             0,
                             16
                         ),
-
-                    'received_audience_hashes' =>
-                        array_map(
-                            static fn (
-                                string $audience
-                            ): string =>
-                                substr(
-                                    hash(
-                                        'sha256',
-                                        $audience
-                                    ),
-                                    0,
-                                    16
-                                ),
-                            $audiences
-                        ),
+                        $audiences
+                    ),
                 ]
             );
         }
@@ -383,15 +353,13 @@ class SocialAuthController extends Controller
             || ! $expirationValid
         ) {
             return response()->json([
-                'message' =>
-                    'Cette identité Google ne peut pas être vérifiée pour Gotfit.',
+                'message' => 'Cette identité Google ne peut pas être vérifiée pour Gotfit.',
             ], 401);
         }
 
         if (! $emailVerified) {
             return response()->json([
-                'message' =>
-                    'Votre adresse e-mail Google doit être vérifiée avant de continuer.',
+                'message' => 'Votre adresse e-mail Google doit être vérifiée avant de continuer.',
             ], 403);
         }
 
@@ -441,8 +409,7 @@ class SocialAuthController extends Controller
                 ->exists()
         ) {
             return response()->json([
-                'message' =>
-                    'Ce numéro de SIRET est déjà utilisé.',
+                'message' => 'Ce numéro de SIRET est déjà utilisé.',
 
                 'errors' => [
                     'siret' => [
@@ -512,44 +479,34 @@ class SocialAuthController extends Controller
                     }
 
                     $user = User::create([
-                        'name' =>
-                            $name,
+                        'name' => $name,
 
-                        'email' =>
-                            $email,
+                        'email' => $email,
 
-                        'password' =>
-                            Hash::make(
-                                Str::random(64)
-                            ),
+                        'password' => Hash::make(
+                            Str::random(64)
+                        ),
 
-                        'google_id' =>
-                            $googleId,
+                        'google_id' => $googleId,
 
-                        'auth_provider' =>
-                            'google',
+                        'auth_provider' => 'google',
 
-                        'google_avatar_url' =>
-                            isset(
-                                $identity['picture']
-                            )
+                        'google_avatar_url' => isset(
+                            $identity['picture']
+                        )
                                 ? (string) $identity['picture']
                                 : null,
 
-                        'email_verified_at' =>
-                            now(),
+                        'email_verified_at' => now(),
 
-                        'last_login_at' =>
-                            now(),
+                        'last_login_at' => now(),
 
-                        'account_status' =>
-                            $roleSlug ===
+                        'account_status' => $roleSlug ===
                             'intervenant'
                                 ? 'pending'
                                 : 'approved',
 
-                        'siret' =>
-                            $roleSlug ===
+                        'siret' => $roleSlug ===
                             'intervenant'
                                 ? (
                                     $validated['siret']
@@ -560,21 +517,17 @@ class SocialAuthController extends Controller
 
                     $role = Role::firstOrCreate(
                         [
-                            'slug' =>
-                                $roleSlug,
+                            'slug' => $roleSlug,
                         ],
                         [
-                            'name' =>
-                                $roleSlug ===
+                            'name' => $roleSlug ===
                                 'intervenant'
                                     ? 'Intervenant'
                                     : 'Client',
 
-                            'description' =>
-                                null,
+                            'description' => null,
 
-                            'is_active' =>
-                                true,
+                            'is_active' => true,
                         ]
                     );
 
@@ -588,26 +541,21 @@ class SocialAuthController extends Controller
                      * Mise à jour d’un compte existant.
                      */
                     $updates = [
-                        'google_id' =>
-                            $user->google_id
+                        'google_id' => $user->google_id
                                 ?: $googleId,
 
-                        'auth_provider' =>
-                            'google',
+                        'auth_provider' => 'google',
 
-                        'google_avatar_url' =>
-                            isset(
-                                $identity['picture']
-                            )
+                        'google_avatar_url' => isset(
+                            $identity['picture']
+                        )
                                 ? (string) $identity['picture']
                                 : $user->google_avatar_url,
 
-                        'email_verified_at' =>
-                            $user->email_verified_at
+                        'email_verified_at' => $user->email_verified_at
                                 ?: now(),
 
-                        'last_login_at' =>
-                            now(),
+                        'last_login_at' => now(),
                     ];
 
                     if (
@@ -680,33 +628,28 @@ class SocialAuthController extends Controller
                 ? 'Votre compte Gotfit a été créé avec Google.'
                 : 'Connexion Google réussie.',
 
-            'is_new_user' =>
-                $isNewUser,
+            'is_new_user' => $isNewUser,
 
-            'token' =>
-                $token,
+            'token' => $token,
 
-            'user' =>
-                $user
-                    ->fresh()
-                    ->load('roles'),
+            'user' => $user
+                ->fresh()
+                ->load('roles'),
 
             'professional_profile' => [
-                'requires_completion' =>
-                    $requiresProfessionalCompletion,
+                'requires_completion' => $requiresProfessionalCompletion,
 
-                'missing_fields' =>
-                    array_values(
-                        array_filter([
-                            ! $user->siret
-                                ? 'siret'
-                                : null,
+                'missing_fields' => array_values(
+                    array_filter([
+                        ! $user->siret
+                            ? 'siret'
+                            : null,
 
-                            ! $hasProfessionalDocument
-                                ? 'diploma_or_certification'
-                                : null,
-                        ])
-                    ),
+                        ! $hasProfessionalDocument
+                            ? 'diploma_or_certification'
+                            : null,
+                    ])
+                ),
             ],
         ], $isNewUser ? 201 : 200);
     }

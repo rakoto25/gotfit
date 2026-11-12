@@ -131,4 +131,30 @@ class GoogleAuthenticationTest extends TestCase
             'credential' => 'signed-google-credential',
         ])->assertUnauthorized();
     }
+
+    public function test_google_login_accepts_the_configured_android_audience(): void
+    {
+        config([
+            'services.google.android_client_id' => 'gotfit-android-client.apps.googleusercontent.com',
+        ]);
+
+        Http::fake([
+            'https://oauth2.googleapis.com/tokeninfo*' => Http::response([
+                'sub' => 'google-android-user',
+                'aud' => 'gotfit-android-client.apps.googleusercontent.com',
+                'iss' => 'https://accounts.google.com',
+                'email' => 'android@example.com',
+                'email_verified' => 'true',
+                'name' => 'Android User',
+                'exp' => now()->addHour()->timestamp,
+            ]),
+        ]);
+
+        $this->postJson('/api/auth/google', [
+            'credential' => 'signed-google-android-credential',
+            'role' => 'client',
+        ])
+            ->assertCreated()
+            ->assertJsonPath('user.email', 'android@example.com');
+    }
 }

@@ -38,6 +38,8 @@ class AdminSecurityAndSystemSettingsTest extends TestCase
         Config::set('services.stripe.key', 'pk_test_public');
         Config::set('services.stripe.secret', 'sk_test_private');
         Config::set('services.google.client_id', 'google-public-id');
+        Config::set('services.google.android_client_id', 'google-android-public-id');
+        Config::set('services.google.ios_client_id', 'google-ios-public-id');
         Config::set('services.google.client_secret', 'google-private-secret');
 
         $this->getJson('/api/public-config')
@@ -45,6 +47,9 @@ class AdminSecurityAndSystemSettingsTest extends TestCase
             ->assertJson([
                 'stripe_publishable_key' => 'pk_test_public',
                 'google_client_id' => 'google-public-id',
+                'google_web_client_id' => 'google-public-id',
+                'google_android_client_id' => 'google-android-public-id',
+                'google_ios_client_id' => 'google-ios-public-id',
             ])
             ->assertJsonMissing(['stripe_secret' => 'sk_test_private'])
             ->assertJsonMissing(['google_client_secret' => 'google-private-secret']);

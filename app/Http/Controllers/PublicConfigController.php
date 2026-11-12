@@ -13,6 +13,9 @@ class PublicConfigController extends Controller
             'turnstile_enabled' => (bool) config('services.turnstile.enabled', false),
             'turnstile_site_key' => config('services.turnstile.enabled', false) ? config('services.turnstile.site_key') : null,
             'google_client_id' => config('services.google.client_id'),
+            'google_web_client_id' => config('services.google.client_id'),
+            'google_android_client_id' => config('services.google.android_client_id'),
+            'google_ios_client_id' => config('services.google.ios_client_id'),
         ])->setPublic()->setMaxAge(300);
     }
 }
