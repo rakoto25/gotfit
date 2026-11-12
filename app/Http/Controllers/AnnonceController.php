@@ -262,6 +262,7 @@ class AnnonceController extends Controller
         }
 
         $existing = Reservation::where('client_id', $user_id)
+            ->where('annonce_id', $annonce->id)
             ->where('reservation_date', $request->reservation_date)
             ->where('reservation_time', $reservationTime)
             ->whereNotIn('status', ['refuse', 'annule'])
@@ -281,64 +282,81 @@ class AnnonceController extends Controller
         }
 
         $price = (float) $annonce->price;
-        $serviceFeeRate = (float) BusinessSetting::value('client_service_fee_rate', 5);
-        $commissionRate = (float) BusinessSetting::value('intervenant_commission_rate', 12);
+        $serviceFeeRate = $this->businessSettingRate('client_service_fee_rate', 5);
+        $commissionRate = $this->businessSettingRate('intervenant_commission_rate', 12);
         $serviceFeeAmount = round($price * $serviceFeeRate / 100, 2);
         $commissionAmount = round($price * $commissionRate / 100, 2);
         $intervenantAmount = round($price - $commissionAmount, 2);
         $totalClientAmount = round($price + $serviceFeeAmount, 2);
 
-        $reservation = DB::transaction(function () use (
-            $annonce,
-            $commissionAmount,
-            $commissionRate,
-            $intervenantAmount,
-            $price,
-            $request,
-            $reservationTime,
-            $serviceFeeAmount,
-            $serviceFeeRate,
-            $totalClientAmount,
-            $user_id
-        ) {
-            $lockedAnnonce = Annonce::query()->lockForUpdate()->findOrFail($annonce->id);
-            User::query()->lockForUpdate()->findOrFail($lockedAnnonce->user_id);
-            $maxParticipants = $this->maxParticipantsFor($lockedAnnonce);
+        try {
+            $reservation = DB::transaction(function () use (
+                $annonce,
+                $commissionAmount,
+                $commissionRate,
+                $intervenantAmount,
+                $price,
+                $request,
+                $reservationTime,
+                $serviceFeeAmount,
+                $serviceFeeRate,
+                $totalClientAmount,
+                $user_id
+            ) {
+                $lockedAnnonce = Annonce::query()->lockForUpdate()->findOrFail($annonce->id);
+                User::query()->lockForUpdate()->findOrFail($lockedAnnonce->user_id);
+                $maxParticipants = $this->maxParticipantsFor($lockedAnnonce);
 
-            $coachReservationsCount = Reservation::where('intervenant_id', $lockedAnnonce->user_id)
-                ->whereDate('reservation_date', $request->reservation_date)
-                ->whereTime('reservation_time', $reservationTime)
-                ->whereNotIn('status', ['refuse', 'annule'])
-                ->whereNotIn('payment_status', ['failed', 'refunded'])
-                ->count();
+                $coachReservationsCount = Reservation::where('intervenant_id', $lockedAnnonce->user_id)
+                    ->whereDate('reservation_date', $request->reservation_date)
+                    ->whereTime('reservation_time', $reservationTime)
+                    ->whereNotIn('status', ['refuse', 'annule'])
+                    ->whereNotIn('payment_status', ['failed', 'refunded'])
+                    ->count();
 
-            if ($coachReservationsCount >= $maxParticipants) {
-                abort(409, 'Ce créneau a atteint la capacité maximale définie par le coach.');
-            }
+                if ($coachReservationsCount >= $maxParticipants) {
+                    abort(409, 'Ce créneau a atteint la capacité maximale définie par le coach.');
+                }
 
-            return Reservation::create([
-                'annonce_id' => $lockedAnnonce->id,
+                return Reservation::create([
+                    'annonce_id' => $lockedAnnonce->id,
+                    'client_id' => $user_id,
+                    'intervenant_id' => $lockedAnnonce->user_id,
+                    'reservation_date' => $request->reservation_date,
+                    'reservation_time' => $reservationTime,
+                    'guests' => 1,
+                    'note' => $request->note,
+                    'price' => $price,
+                    'service_fee_rate' => $serviceFeeRate,
+                    'service_fee_amount' => $serviceFeeAmount,
+                    'commission_rate' => $commissionRate,
+                    'commission_amount' => $commissionAmount,
+                    'intervenant_amount' => $intervenantAmount,
+                    'total_client_amount' => $totalClientAmount,
+                    'currency' => 'eur',
+                    'status' => 'attente',
+                    'is_paid' => false,
+                    'payment_status' => 'pending',
+                    'prestation_status' => 'pending_payment',
+                    'payout_status' => 'pending',
+                ]);
+            }, 3);
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpExceptionInterface $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('Création de réservation impossible', [
+                'annonce_id' => $annonce->id,
                 'client_id' => $user_id,
-                'intervenant_id' => $lockedAnnonce->user_id,
-                'reservation_date' => $request->reservation_date,
-                'reservation_time' => $reservationTime,
-                'guests' => 1,
-                'note' => $request->note,
-                'price' => $price,
-                'service_fee_rate' => $serviceFeeRate,
-                'service_fee_amount' => $serviceFeeAmount,
-                'commission_rate' => $commissionRate,
-                'commission_amount' => $commissionAmount,
-                'intervenant_amount' => $intervenantAmount,
-                'total_client_amount' => $totalClientAmount,
-                'currency' => 'eur',
-                'status' => 'attente',
-                'is_paid' => false,
-                'payment_status' => 'pending',
-                'prestation_status' => 'pending_payment',
-                'payout_status' => 'pending',
+                'date' => $request->reservation_date,
+                'time' => $reservationTime,
+                'error' => $e->getMessage(),
             ]);
-        });
+
+            return response()->json([
+                'status' => 503,
+                'message' => 'La réservation n’a pas pu être enregistrée. Aucun paiement n’a été lancé. Réessayez dans quelques instants.',
+            ], 503);
+        }
 
         $reservation->load(['annonce', 'client', 'intervenant']);
         $this->notifyReservationUsers($reservation, 'created');
@@ -379,6 +397,35 @@ class AnnonceController extends Controller
         $data['longitude'] = null;
 
         return $data;
+    }
+
+    private function businessSettingRate(string $key, float $fallback): float
+    {
+        try {
+            $value = BusinessSetting::value($key, $fallback);
+        } catch (\Throwable $e) {
+            Log::warning('Paramètre métier indisponible, valeur par défaut appliquée', [
+                'key' => $key,
+                'fallback' => $fallback,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $fallback;
+        }
+
+        if (! is_numeric($value)) {
+            Log::warning('Paramètre métier invalide, valeur par défaut appliquée', [
+                'key' => $key,
+                'value' => $value,
+                'fallback' => $fallback,
+            ]);
+
+            return $fallback;
+        }
+
+        $rate = (float) $value;
+
+        return $rate >= 0 && $rate <= 100 ? $rate : $fallback;
     }
 
     private function validateAnnonce(Request $request, bool $required = true): array

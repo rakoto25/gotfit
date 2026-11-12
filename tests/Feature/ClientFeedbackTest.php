@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Notifications\CoachApprovedNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Schema;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -56,6 +57,45 @@ class ClientFeedbackTest extends TestCase
         $this->putJson("/api/annonces/{$annonce->id}/reserve", [
             'reservation_date' => now()->addDay()->toDateString(), 'reservation_time' => '10:00',
         ])->assertUnprocessable();
+    }
+
+    public function test_pending_reservation_for_another_announcement_does_not_hijack_checkout(): void
+    {
+        Notification::fake();
+        $firstAnnonce = $this->service($this->member('intervenant'));
+        $secondAnnonce = $this->service($this->member('intervenant'));
+        Sanctum::actingAs($this->member('client'));
+        $date = now()->addDay()->toDateString();
+
+        $firstReservation = $this->putJson("/api/annonces/{$firstAnnonce->id}/reserve", [
+            'reservation_date' => $date,
+            'reservation_time' => '10:00',
+        ])->assertOk()->json('reservation.id');
+
+        $secondResponse = $this->putJson("/api/annonces/{$secondAnnonce->id}/reserve", [
+            'reservation_date' => $date,
+            'reservation_time' => '10:00',
+        ])->assertOk();
+
+        $this->assertNotSame($firstReservation, $secondResponse->json('reservation.id'));
+        $secondResponse->assertJsonPath('reservation.annonce_id', $secondAnnonce->id);
+        $this->assertDatabaseCount('reservations', 2);
+    }
+
+    public function test_booking_uses_safe_fee_defaults_when_business_settings_are_unavailable(): void
+    {
+        Notification::fake();
+        $annonce = $this->service($this->member('intervenant'));
+        Sanctum::actingAs($this->member('client'));
+        Schema::drop('business_settings');
+
+        $this->putJson("/api/annonces/{$annonce->id}/reserve", [
+            'reservation_date' => now()->addDay()->toDateString(),
+            'reservation_time' => '10:00',
+        ])->assertOk()
+            ->assertJsonPath('reservation.service_fee_rate', '5.00')
+            ->assertJsonPath('reservation.commission_rate', '12.00')
+            ->assertJsonPath('reservation.total_client_amount', '47.78');
     }
 
     public function test_rescheduling_outside_coach_hours_preserves_original_reservation(): void

@@ -191,17 +191,41 @@ class PayementController extends Controller
             ], 502);
         }
 
-        $reservation->update([
-            'payment_intent_id' => $paymentIntent->id,
-            'payment_status' => 'pending',
-            'prestation_status' => 'pending_payment',
-            'payout_status' => 'pending',
-        ]);
+        try {
+            $reservation->update([
+                'payment_intent_id' => $paymentIntent->id,
+                'payment_status' => 'pending',
+                'prestation_status' => 'pending_payment',
+                'payout_status' => 'pending',
+            ]);
 
-        $this->linkVisioParticipantToPaymentIntent($reservation, $paymentIntent->id);
+            $this->linkVisioParticipantToPaymentIntent($reservation, $paymentIntent->id);
+            $reservation = $reservation->fresh(['annonce', 'intervenant', 'visioSession']);
+        } catch (\Throwable $e) {
+            Log::critical('Payment Intent créé mais non rattaché à la réservation', [
+                'reservation_id' => $reservation->id,
+                'payment_intent_id' => $paymentIntent->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            try {
+                PaymentIntent::retrieve($paymentIntent->id)->cancel();
+            } catch (\Throwable $cancelError) {
+                Log::critical('Payment Intent orphelin impossible à annuler', [
+                    'reservation_id' => $reservation->id,
+                    'payment_intent_id' => $paymentIntent->id,
+                    'error' => $cancelError->getMessage(),
+                ]);
+            }
+
+            return response()->json([
+                'status' => 503,
+                'message' => 'Le paiement n’a pas pu être rattaché à la réservation. Aucun débit n’a été effectué. Réessayez dans quelques instants.',
+            ], 503);
+        }
 
         return response()->json($this->paymentIntentResponse(
-            $reservation->fresh(['annonce', 'intervenant', 'visioSession']),
+            $reservation,
             $paymentIntent,
             $amountInCents
         ));
